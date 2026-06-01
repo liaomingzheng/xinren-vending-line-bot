@@ -1,7 +1,7 @@
 {
-  "name": "xinren-vending-line-bot-v3-map",
-  "version": "3.0.0",
-  "description": "新刃智能販賣機商城 LINE Bot V3 地圖據點版",
+  "name": "xinren-vending-line-bot-v4-irent-map",
+  "version": "4.0.0",
+  "description": "新刃智能販賣機商城 LINE Bot - V4 iRent style vending machine map",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

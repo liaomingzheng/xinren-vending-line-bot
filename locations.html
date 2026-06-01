@@ -2,423 +2,315 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>新刃智能販賣機據點地圖</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIINfQvHo0WgFRfA2yfdcQ/0uGQ34UGXD0=" crossorigin="" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>新刃智能販賣機地圖</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    :root {
-      --brand: #111827;
-      --accent: #16a34a;
-      --muted: #6b7280;
-      --line: #e5e7eb;
-      --card: #ffffff;
-      --bg: #f8fafc;
-    }
-
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--brand);
-    }
-
-    header {
-      padding: 18px 16px 14px;
-      background: #ffffff;
-      border-bottom: 1px solid var(--line);
-      position: sticky;
-      top: 0;
-      z-index: 1000;
-    }
-
-    .title { font-size: 22px; font-weight: 800; margin: 0; }
-    .subtitle { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
-
-    .toolbar {
-      display: grid;
-      gap: 10px;
-      padding: 12px 16px;
-      background: #ffffff;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .search {
-      width: 100%;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 12px 14px;
-      font-size: 16px;
-      outline: none;
-      background: #fff;
-    }
-
-    .filters {
-      display: flex;
-      gap: 8px;
-      overflow-x: auto;
-      padding-bottom: 2px;
-    }
-
-    .filter-btn, .locate-btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: var(--brand);
-      padding: 10px 12px;
-      border-radius: 999px;
-      white-space: nowrap;
-      font-size: 14px;
-      cursor: pointer;
-    }
-
-    .filter-btn.active, .locate-btn.primary {
-      background: var(--brand);
-      color: #fff;
-      border-color: var(--brand);
-    }
-
-    #map {
-      height: 42vh;
-      min-height: 320px;
-      width: 100%;
-      background: #dbeafe;
-    }
-
-    .content { padding: 14px 16px 28px; }
-
-    .hint {
-      background: #ecfdf5;
-      border: 1px solid #bbf7d0;
-      color: #166534;
-      border-radius: 16px;
-      padding: 12px 14px;
-      font-size: 14px;
-      margin-bottom: 12px;
-      line-height: 1.5;
-    }
-
-    .machine-list {
-      display: grid;
-      gap: 12px;
-    }
-
-    .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 20px;
-      padding: 14px;
-      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-    }
-
-    .card-top {
-      display: flex;
-      justify-content: space-between;
-      gap: 10px;
-      align-items: flex-start;
-    }
-
-    .name { font-size: 18px; font-weight: 800; margin: 0 0 4px; }
-    .id { color: var(--muted); font-size: 13px; word-break: break-all; }
-    .badge {
-      background: #dcfce7;
-      color: #166534;
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .meta { margin: 12px 0; color: #374151; line-height: 1.6; font-size: 14px; }
-    .distance { color: var(--accent); font-weight: 700; }
-
-    .actions {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 8px;
-    }
-
-    .action {
-      text-decoration: none;
-      text-align: center;
-      border-radius: 12px;
-      padding: 10px 8px;
-      font-size: 14px;
-      font-weight: 700;
-      color: #111827;
-      border: 1px solid var(--line);
-      background: #fff;
-    }
-
-    .action.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-
-    .empty {
-      text-align: center;
-      color: var(--muted);
-      padding: 40px 10px;
-      background: #fff;
-      border-radius: 18px;
-      border: 1px dashed var(--line);
-    }
-
-    .leaflet-popup-content { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif; background: #f5f5f5; color: #111; }
+    #map { position: fixed; inset: 0; z-index: 1; }
+    .top-bar { position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0; z-index: 10; padding: 12px 14px 6px; pointer-events: none; }
+    .search-card { background: rgba(255,255,255,.96); border-radius: 18px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 12px; pointer-events: auto; }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+    .brand-title { font-weight: 800; font-size: 18px; letter-spacing: .2px; }
+    .brand-sub { font-size: 12px; color: #666; margin-top: 2px; }
+    .locate-btn { border: 0; background: #111; color: white; border-radius: 999px; padding: 9px 12px; font-weight: 700; white-space: nowrap; }
+    .search-row { display: flex; gap: 8px; }
+    .search-row input { flex: 1; border: 1px solid #ddd; background: #fafafa; border-radius: 14px; padding: 11px 12px; font-size: 15px; outline: none; }
+    .chips { display: flex; gap: 8px; overflow-x: auto; padding-top: 10px; scrollbar-width: none; }
+    .chips::-webkit-scrollbar { display: none; }
+    .chip { border: 1px solid #ddd; background: #fff; border-radius: 999px; padding: 8px 12px; font-size: 14px; white-space: nowrap; }
+    .chip.active { background: #111; color: white; border-color: #111; }
+    .bottom-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: rgba(255,255,255,.98); border-radius: 24px 24px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,.18); padding: 10px 14px calc(14px + env(safe-area-inset-bottom, 0)); max-height: 45vh; display: flex; flex-direction: column; }
+    .handle { width: 44px; height: 5px; background: #ddd; border-radius: 999px; margin: 0 auto 10px; }
+    .sheet-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+    .sheet-title { font-size: 18px; font-weight: 800; }
+    .sheet-count { color: #666; font-size: 13px; }
+    .machine-list { overflow-y: auto; display: grid; gap: 10px; padding-bottom: 2px; }
+    .machine-card { border: 1px solid #e6e6e6; background: #fff; border-radius: 18px; padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+    .machine-card.selected { border: 2px solid #111; }
+    .card-top { display: flex; justify-content: space-between; gap: 8px; }
+    .machine-name { font-weight: 800; font-size: 16px; }
+    .status { font-size: 12px; background: #eaf8ef; color: #137333; border-radius: 999px; padding: 4px 8px; white-space: nowrap; align-self: flex-start; }
+    .machine-id, .address, .distance { font-size: 13px; color: #555; margin-top: 5px; line-height: 1.35; }
+    .actions { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .action { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; border-radius: 13px; padding: 10px 8px; font-size: 13px; font-weight: 700; border: 1px solid #ddd; color: #111; background: #fafafa; }
+    .action.primary { background: #111; color: #fff; border-color: #111; }
+    .leaflet-popup-content-wrapper { border-radius: 14px; }
     .popup-title { font-weight: 800; margin-bottom: 4px; }
-    .popup-link { color: #16a34a; font-weight: 700; }
-
-    @media (min-width: 900px) {
-      main {
-        display: grid;
-        grid-template-columns: 1.05fr 0.95fr;
-        min-height: calc(100vh - 80px);
-      }
-      #map { height: calc(100vh - 80px); position: sticky; top: 80px; }
-      .toolbar { grid-template-columns: 1fr auto; align-items: center; }
-      .content { overflow: auto; }
+    .popup-link { color: #111; font-weight: 700; }
+    @media (min-width: 760px) {
+      .top-bar { width: 420px; right: auto; }
+      .bottom-sheet { left: 14px; right: auto; bottom: 14px; width: 420px; border-radius: 24px; max-height: 54vh; padding-bottom: 14px; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1 class="title">新刃智能販賣機據點地圖</h1>
-    <p class="subtitle">Otto 智能販賣機｜附近機台、地區篩選、一鍵導航</p>
-  </header>
+  <div id="map"></div>
 
-  <section class="toolbar">
-    <input id="search" class="search" type="search" placeholder="搜尋機台編號、名稱、地址，例如：男宿、南投、高雄" />
-    <div class="filters">
-      <button class="filter-btn active" data-area="all">全部</button>
-      <button class="filter-btn" data-area="nantou">南投埔里</button>
-      <button class="filter-btn" data-area="kaohsiung">高雄大樹</button>
-      <button id="locate" class="locate-btn primary">附近機台</button>
-    </div>
-  </section>
-
-  <main>
-    <div id="map"></div>
-    <section class="content">
-      <div class="hint">
-        點「附近機台」可依你目前位置排序。若瀏覽器詢問定位權限，請選擇允許。導航會開啟 Google 地圖。
+  <div class="top-bar">
+    <div class="search-card">
+      <div class="brand">
+        <div>
+          <div class="brand-title">新刃智能販賣機地圖</div>
+          <div class="brand-sub">選擇要前往的 Otto 販賣機</div>
+        </div>
+        <button class="locate-btn" id="locateBtn">附近機台</button>
       </div>
-      <div id="machineList" class="machine-list"></div>
-    </section>
-  </main>
+      <div class="search-row">
+        <input id="searchInput" placeholder="搜尋機台、編號、地點" />
+      </div>
+      <div class="chips">
+        <button class="chip active" data-area="all">全部</button>
+        <button class="chip" data-area="nantou">南投埔里</button>
+        <button class="chip" data-area="kaohsiung">高雄大樹</button>
+      </div>
+    </div>
+  </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <div class="bottom-sheet">
+    <div class="handle"></div>
+    <div class="sheet-head">
+      <div class="sheet-title">可選機台</div>
+      <div class="sheet-count" id="countText">4 台</div>
+    </div>
+    <div class="machine-list" id="machineList"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const machines = [
       {
         id: "F6380162C464EF",
         name: "Otto 黑色機臺",
+        shortName: "黑色機臺",
         area: "nantou",
-        areaLabel: "南投埔里",
+        areaName: "南投埔里",
         address: "南投縣埔里鎮桃迷里大學路一號",
         note: "1樓大廳／門口右側",
-        status: "正常營運",
         mapUrl: "https://maps.app.goo.gl/2bX5Xt6S8NXAEk9D7",
-        lat: 23.95157,
-        lng: 120.92785
+        lat: 23.95195,
+        lng: 120.92788,
+        status: "正常營運"
       },
       {
         id: "F638C49405968C",
         name: "Otto 藍色機臺",
+        shortName: "藍色機臺",
         area: "nantou",
-        areaLabel: "南投埔里",
+        areaName: "南投埔里",
         address: "南投縣埔里鎮桃迷里大學路一號",
         note: "1樓大廳／門口右側",
-        status: "正常營運",
         mapUrl: "https://maps.app.goo.gl/2bX5Xt6S8NXAEk9D7",
-        lat: 23.95172,
-        lng: 120.92795
+        lat: 23.95205,
+        lng: 120.92805,
+        status: "正常營運"
       },
       {
         id: "F638C3B40B65CC",
         name: "Otto 男宿",
+        shortName: "男宿",
         area: "kaohsiung",
-        areaLabel: "高雄大樹",
+        areaName: "高雄大樹",
         address: "高雄市大樹區三和里學城路一段1號",
         note: "男宿",
-        status: "正常營運",
         mapUrl: "https://maps.app.goo.gl/9x3eaFvodGGbGYf3A",
-        lat: 22.72927,
-        lng: 120.40638
+        lat: 22.72855,
+        lng: 120.40585,
+        status: "正常營運"
       },
       {
         id: "F638C41405C535",
         name: "Otto 綜合教學大樓",
+        shortName: "綜合教學大樓",
         area: "kaohsiung",
-        areaLabel: "高雄大樹",
+        areaName: "高雄大樹",
         address: "高雄市大樹區三和里學城路一段1號",
         note: "綜合教學大樓",
-        status: "正常營運",
         mapUrl: "https://maps.app.goo.gl/9x3eaFvodGGbGYf3A",
-        lat: 22.7296,
-        lng: 120.4071
+        lat: 22.72905,
+        lng: 120.40645,
+        status: "正常營運"
       }
     ];
 
-    const params = new URLSearchParams(window.location.search);
-    let currentArea = params.get("area") || "all";
-    let userLocation = null;
-    let markers = [];
+    const repairUrl = "https://forms.gle";
+    const stockUrl = "https://forms.gle";
 
-    const map = L.map("map", { scrollWheelZoom: true }).setView([23.35, 120.65], 8);
+    let selectedArea = "all";
+    let searchText = "";
+    let userLocation = null;
+    let selectedId = machines[0].id;
+    const markers = new Map();
+
+    const map = L.map("map", { zoomControl: false }).setView([23.45, 120.72], 8);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: "&copy; OpenStreetMap"
     }).addTo(map);
 
-    const listEl = document.getElementById("machineList");
-    const searchEl = document.getElementById("search");
-    const locateBtn = document.getElementById("locate");
-    const filterBtns = document.querySelectorAll(".filter-btn");
-
-    filterBtns.forEach(btn => {
-      if (btn.dataset.area === currentArea) btn.classList.add("active");
-      else btn.classList.remove("active");
-
-      btn.addEventListener("click", () => {
-        currentArea = btn.dataset.area;
-        filterBtns.forEach(b => b.classList.toggle("active", b === btn));
-        render();
-      });
+    const normalIcon = L.divIcon({
+      className: "",
+      html: '<div style="width:34px;height:34px;border-radius:50%;background:#111;color:#fff;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 3px 12px rgba(0,0,0,.35);font-weight:800;">販</div>',
+      iconSize: [34, 34],
+      iconAnchor: [17, 17]
     });
 
-    searchEl.addEventListener("input", render);
-
-    locateBtn.addEventListener("click", () => {
-      if (!navigator.geolocation) {
-        alert("您的瀏覽器不支援定位功能。");
-        return;
-      }
-
-      locateBtn.textContent = "定位中...";
-      navigator.geolocation.getCurrentPosition(
-        position => {
-          userLocation = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          };
-          locateBtn.textContent = "附近機台";
-          render();
-          map.setView([userLocation.lat, userLocation.lng], 12);
-          L.circleMarker([userLocation.lat, userLocation.lng], {
-            radius: 8,
-            color: "#2563eb",
-            fillColor: "#2563eb",
-            fillOpacity: 0.8
-          }).addTo(map).bindPopup("你目前的位置");
-        },
-        () => {
-          locateBtn.textContent = "附近機台";
-          alert("無法取得位置。請確認已允許定位權限。仍可使用地區篩選與導航。");
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
+    const selectedIcon = L.divIcon({
+      className: "",
+      html: '<div style="width:42px;height:42px;border-radius:50%;background:#ffcc00;color:#111;display:flex;align-items:center;justify-content:center;border:4px solid #fff;box-shadow:0 4px 16px rgba(0,0,0,.45);font-weight:900;">選</div>',
+      iconSize: [42, 42],
+      iconAnchor: [21, 21]
     });
 
-    function getFilteredMachines() {
-      const keyword = searchEl.value.trim().toLowerCase();
-      let result = machines.filter(machine => currentArea === "all" || machine.area === currentArea);
+    machines.forEach(machine => {
+      const marker = L.marker([machine.lat, machine.lng], { icon: normalIcon }).addTo(map);
+      marker.bindPopup(`
+        <div class="popup-title">${machine.name}</div>
+        <div>${machine.note}</div>
+        <div style="font-size:12px;color:#555;margin:4px 0;">${machine.id}</div>
+        <a class="popup-link" href="${machine.mapUrl}" target="_blank">開啟導航</a>
+      `);
+      marker.on("click", () => selectMachine(machine.id, true));
+      markers.set(machine.id, marker);
+    });
 
-      if (keyword) {
-        result = result.filter(machine => {
-          return [machine.id, machine.name, machine.areaLabel, machine.address, machine.note]
-            .join(" ")
-            .toLowerCase()
-            .includes(keyword);
-        });
+    function filteredMachines() {
+      const q = searchText.toLowerCase();
+      let list = machines.filter(m => selectedArea === "all" || m.area === selectedArea);
+      if (q) {
+        list = list.filter(m =>
+          m.name.toLowerCase().includes(q) ||
+          m.id.toLowerCase().includes(q) ||
+          m.address.toLowerCase().includes(q) ||
+          m.note.toLowerCase().includes(q) ||
+          m.areaName.toLowerCase().includes(q)
+        );
       }
-
       if (userLocation) {
-        result = result
-          .map(machine => ({ ...machine, distance: distanceKm(userLocation.lat, userLocation.lng, machine.lat, machine.lng) }))
-          .sort((a, b) => a.distance - b.distance);
+        list = list.map(m => ({ ...m, distance: distanceKm(userLocation.lat, userLocation.lng, m.lat, m.lng) }))
+                   .sort((a, b) => a.distance - b.distance);
       }
-
-      return result;
+      return list;
     }
 
-    function render() {
-      const data = getFilteredMachines();
-      renderList(data);
-      renderMarkers(data);
-    }
-
-    function renderList(data) {
-      if (!data.length) {
-        listEl.innerHTML = `<div class="empty">找不到符合條件的機台</div>`;
-        return;
-      }
-
-      listEl.innerHTML = data.map(machine => `
-        <article class="card">
+    function renderList() {
+      const list = filteredMachines();
+      document.getElementById("countText").textContent = `${list.length} 台`;
+      document.getElementById("machineList").innerHTML = list.map(m => `
+        <div class="machine-card ${m.id === selectedId ? "selected" : ""}" data-id="${m.id}">
           <div class="card-top">
             <div>
-              <h2 class="name">${escapeHtml(machine.name)}</h2>
-              <div class="id">機台編號：${escapeHtml(machine.id)}</div>
+              <div class="machine-name">${m.name}</div>
+              <div class="machine-id">${m.areaName}｜${m.id}</div>
             </div>
-            <div class="badge">${escapeHtml(machine.status)}</div>
+            <div class="status">${m.status}</div>
           </div>
-          <div class="meta">
-            <div>地區：${escapeHtml(machine.areaLabel)}</div>
-            <div>地址：${escapeHtml(machine.address)}</div>
-            <div>備註：${escapeHtml(machine.note)}</div>
-            ${typeof machine.distance === "number" ? `<div class="distance">距離：約 ${machine.distance.toFixed(1)} 公里</div>` : ""}
-          </div>
+          <div class="address">${m.address}</div>
+          <div class="distance">${m.note}${m.distance !== undefined ? `｜距離約 ${m.distance.toFixed(1)} km` : ""}</div>
           <div class="actions">
-            <a class="action primary" href="${machine.mapUrl}" target="_blank" rel="noopener">導航</a>
-            <a class="action" href="https://line.me/R/oaMessage/@158aeudm/?我要報修：${encodeURIComponent(machine.id)}" target="_blank" rel="noopener">報修</a>
-            <a class="action" href="https://line.me/R/oaMessage/@158aeudm/?我要回報缺貨：${encodeURIComponent(machine.id)}" target="_blank" rel="noopener">缺貨</a>
+            <a class="action primary" href="${m.mapUrl}" target="_blank">前往這台</a>
+            <a class="action" href="${repairUrl}" target="_blank">報修</a>
+            <a class="action" href="${stockUrl}" target="_blank">缺貨</a>
           </div>
-        </article>
+        </div>
       `).join("");
-    }
 
-    function renderMarkers(data) {
-      markers.forEach(marker => marker.remove());
-      markers = [];
-
-      data.forEach(machine => {
-        const marker = L.marker([machine.lat, machine.lng]).addTo(map);
-        marker.bindPopup(`
-          <div class="popup-title">${escapeHtml(machine.name)}</div>
-          <div>${escapeHtml(machine.address)}</div>
-          <div>${escapeHtml(machine.note)}</div>
-          <a class="popup-link" href="${machine.mapUrl}" target="_blank" rel="noopener">開啟導航</a>
-        `);
-        markers.push(marker);
+      document.querySelectorAll(".machine-card").forEach(card => {
+        card.addEventListener("click", e => {
+          if (e.target.tagName.toLowerCase() === "a") return;
+          selectMachine(card.dataset.id, true);
+        });
       });
 
-      if (data.length) {
-        const group = L.featureGroup(markers);
-        map.fitBounds(group.getBounds().pad(0.25));
-      }
+      updateMarkerVisibility(list);
     }
 
-    function distanceKm(lat1, lon1, lat2, lon2) {
+    function updateMarkerVisibility(list) {
+      const ids = new Set(list.map(m => m.id));
+      machines.forEach(m => {
+        const marker = markers.get(m.id);
+        if (ids.has(m.id)) {
+          if (!map.hasLayer(marker)) marker.addTo(map);
+        } else {
+          if (map.hasLayer(marker)) map.removeLayer(marker);
+        }
+        marker.setIcon(m.id === selectedId ? selectedIcon : normalIcon);
+      });
+    }
+
+    function selectMachine(id, pan) {
+      selectedId = id;
+      const m = machines.find(x => x.id === id);
+      if (!m) return;
+      markers.forEach((marker, markerId) => marker.setIcon(markerId === id ? selectedIcon : normalIcon));
+      if (pan) {
+        map.setView([m.lat, m.lng], 17, { animate: true });
+        markers.get(id).openPopup();
+      }
+      renderList();
+      const selected = document.querySelector(`.machine-card[data-id="${id}"]`);
+      if (selected) selected.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function fitAll() {
+      const list = filteredMachines();
+      if (!list.length) return;
+      const bounds = L.latLngBounds(list.map(m => [m.lat, m.lng]));
+      map.fitBounds(bounds, { paddingTopLeft: [40, 130], paddingBottomRight: [40, 260], maxZoom: 17 });
+    }
+
+    function distanceKm(lat1, lng1, lat2, lng2) {
       const R = 6371;
       const dLat = toRad(lat2 - lat1);
-      const dLon = toRad(lon2 - lon1);
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return R * c;
+      const dLng = toRad(lng2 - lng1);
+      const a = Math.sin(dLat/2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
 
-    function toRad(value) { return value * Math.PI / 180; }
+    function toRad(deg) { return deg * Math.PI / 180; }
 
-    function escapeHtml(value) {
-      return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
+    document.querySelectorAll(".chip").forEach(chip => {
+      chip.addEventListener("click", () => {
+        document.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+        chip.classList.add("active");
+        selectedArea = chip.dataset.area;
+        renderList();
+        fitAll();
+      });
+    });
 
-    render();
+    document.getElementById("searchInput").addEventListener("input", e => {
+      searchText = e.target.value.trim();
+      renderList();
+      fitAll();
+    });
+
+    document.getElementById("locateBtn").addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        alert("此裝置不支援定位功能");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(pos => {
+        userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        L.circleMarker([userLocation.lat, userLocation.lng], {
+          radius: 8,
+          color: "#1677ff",
+          fillColor: "#1677ff",
+          fillOpacity: 0.9
+        }).addTo(map).bindPopup("你目前的位置");
+        renderList();
+        const nearest = filteredMachines()[0];
+        if (nearest) selectMachine(nearest.id, true);
+      }, () => {
+        alert("無法取得定位，請確認手機定位權限已開啟");
+      }, { enableHighAccuracy: true, timeout: 8000 });
+    });
+
+    renderList();
+    fitAll();
+    setTimeout(() => selectMachine(machines[0].id, false), 400);
   </script>
 </body>
 </html>
