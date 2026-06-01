@@ -17,7 +17,7 @@ const client = new line.messagingApi.MessagingApiClient({
 
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://xinren-vending-line-bot.onrender.com";
 const SHOP_URL = process.env.SHOP_URL || "https://line.me";
-const LOCATION_URL = process.env.LOCATION_URL || `${PUBLIC_BASE_URL}/locations`;
+const LOCATION_URL = process.env.LOCATION_URL || `${PUBLIC_BASE_URL}/locations?v=5`;
 const STOCK_FORM_URL = process.env.STOCK_FORM_URL || "https://forms.gle";
 const REPAIR_FORM_URL = process.env.REPAIR_FORM_URL || "https://forms.gle";
 const PARTNER_FORM_URL = process.env.PARTNER_FORM_URL || "https://forms.gle";
@@ -29,6 +29,9 @@ app.get("/", (req, res) => {
 });
 
 app.get("/locations", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
   res.sendFile(path.join(__dirname, "public", "locations.html"));
 });
 
