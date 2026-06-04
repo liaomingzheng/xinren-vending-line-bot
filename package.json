@@ -1,15 +1,19 @@
 {
-  "name": "xinren-vending-line-bot-v4-irent-map",
-  "version": "4.0.0",
-  "description": "新刃智能販賣機商城 LINE Bot - V4 iRent style vending machine map",
+  "name": "xinren-vending-line-bot-v6-tenlife",
+  "version": "6.0.0",
+  "description": "新刃智能販賣機商城 V6 - LINE + LIFF + Tenlife API 串接版",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
   "dependencies": {
-    "@line/bot-sdk": "^9.5.0",
+    "@line/bot-sdk": "^9.9.0",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

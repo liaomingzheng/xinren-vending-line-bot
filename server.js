@@ -1,283 +1,288 @@
-require("dotenv").config();
+require('dotenv').config();
 
-const express = require("express");
-const path = require("path");
-const line = require("@line/bot-sdk");
+const path = require('path');
+const express = require('express');
+const line = require('@line/bot-sdk');
+const QRCode = require('qrcode');
+const tenlife = require('./services/tenlifeApi');
 
 const app = express();
+const port = process.env.PORT || 3000;
 
-const config = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  setHeaders(res) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+}));
+
+const lineConfig = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || 'dummy',
+  channelSecret: process.env.LINE_CHANNEL_SECRET || 'dummy'
 };
 
-const client = new line.messagingApi.MessagingApiClient({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
+const lineClient = new line.messagingApi.MessagingApiClient({
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || 'dummy'
 });
 
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || "https://xinren-vending-line-bot.onrender.com";
-const SHOP_URL = process.env.SHOP_URL || "https://line.me";
-const LOCATION_URL = process.env.LOCATION_URL || `${PUBLIC_BASE_URL}/locations?v=5`;
-const STOCK_FORM_URL = process.env.STOCK_FORM_URL || "https://forms.gle";
-const REPAIR_FORM_URL = process.env.REPAIR_FORM_URL || "https://forms.gle";
-const PARTNER_FORM_URL = process.env.PARTNER_FORM_URL || "https://forms.gle";
+const pendingOrders = new Map();
 
-app.use(express.static(path.join(__dirname, "public")));
+function appBase(req) {
+  return process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
+}
 
-app.get("/", (req, res) => {
-  res.send("新刃智能販賣機商城 LINE Bot is running.");
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
+function formatDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function formatDate(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function safeAsync(fn) {
+  return async (req, res) => {
+    try { await fn(req, res); } catch (error) {
+      console.error(error);
+      res.status(500).json({ ok: false, message: error.message || 'Server error' });
+    }
+  };
+}
+
+function textMessage(text) {
+  return { type: 'text', text };
+}
+
+function flexEntry(baseUrl) {
+  return {
+    type: 'flex',
+    altText: '新刃智能販賣機商城',
+    contents: {
+      type: 'bubble',
+      size: 'mega',
+      header: {
+        type: 'box',
+        layout: 'vertical',
+        backgroundColor: '#0F766E',
+        paddingAll: '18px',
+        contents: [
+          { type: 'text', text: '新刃智能販賣機商城', weight: 'bold', color: '#FFFFFF', size: 'xl' },
+          { type: 'text', text: '照設備 / 照商品訂購', color: '#D1FAE5', size: 'sm', margin: 'sm' }
+        ]
+      },
+      body: {
+        type: 'box',
+        layout: 'vertical',
+        spacing: 'md',
+        contents: [
+          { type: 'button', style: 'primary', color: '#2563EB', action: { type: 'uri', label: '照設備訂購', uri: `${baseUrl}/order-by-machine.html` } },
+          { type: 'button', style: 'primary', color: '#16A34A', action: { type: 'uri', label: '照商品訂購', uri: `${baseUrl}/order-by-product.html` } },
+          { type: 'button', action: { type: 'uri', label: '查詢訂單 / 領取狀態', uri: `${baseUrl}/orders.html` } },
+          { type: 'button', action: { type: 'uri', label: '操作說明', uri: `${baseUrl}/guide.html` } }
+        ]
+      }
+    }
+  };
+}
+
+async function handleLineEvent(event, req) {
+  if (event.type === 'follow') {
+    const baseUrl = appBase(req);
+    return lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [textMessage('歡迎來到新刃智能販賣機商城，請選擇訂購方式。'), flexEntry(baseUrl)]
+    });
+  }
+
+  if (event.type !== 'message' || event.message.type !== 'text') return null;
+  const text = event.message.text.trim();
+  const baseUrl = appBase(req);
+
+  if (/訂購|照設備|照商品|商城|購買|買|下單/.test(text)) {
+    return lineClient.replyMessage({ replyToken: event.replyToken, messages: [flexEntry(baseUrl)] });
+  }
+  if (/據點|設備|機台|地圖/.test(text)) {
+    return lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [
+        textMessage('請開啟機台地圖，選擇你要前往的販賣機。'),
+        { type: 'template', altText: '機台地圖', template: { type: 'buttons', title: '機台地圖', text: '像租車據點一樣選擇販賣機', actions: [
+          { type: 'uri', label: '開啟機台地圖', uri: `${baseUrl}/order-by-machine.html` },
+          { type: 'uri', label: '查詢訂單', uri: `${baseUrl}/orders.html` }
+        ] } }
+      ]
+    });
+  }
+  return lineClient.replyMessage({ replyToken: event.replyToken, messages: [flexEntry(baseUrl)] });
+}
+
+app.get('/', (req, res) => {
+  res.send('新刃智能販賣機商城 V6 Tenlife API 串接版 is running.');
 });
 
-app.get("/locations", (req, res) => {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma", "no-cache");
-  res.set("Expires", "0");
-  res.sendFile(path.join(__dirname, "public", "locations.html"));
-});
-
-app.post("/webhook", line.middleware(config), async (req, res) => {
+app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
   try {
-    const events = req.body.events || [];
-    await Promise.all(events.map(handleEvent));
+    await Promise.all((req.body.events || []).map((event) => handleLineEvent(event, req)));
     res.status(200).end();
   } catch (error) {
-    console.error("Webhook error:", error);
+    console.error('LINE webhook error:', error);
     res.status(500).end();
   }
 });
 
-async function handleEvent(event) {
-  if (event.type === "follow") {
-    return replyMessage(event.replyToken, welcomeMessage());
-  }
+app.get('/api/config', (req, res) => {
+  res.json({ ok: true, hasTenlifeCredentials: tenlife.hasCredentials(), appBaseUrl: appBase(req), paymentMode: process.env.PAYMENT_MODE || 'mock' });
+});
 
-  if (event.type !== "message" || event.message.type !== "text") {
-    return replyMessage(event.replyToken, textMessage("目前請使用文字訊息操作喔。"));
-  }
+app.get('/api/machines', safeAsync(async (req, res) => {
+  const machines = await tenlife.listMachines();
+  res.json({ ok: true, machines });
+}));
 
-  const userText = event.message.text.trim();
+app.get('/api/machines/:code/state', safeAsync(async (req, res) => {
+  const data = await tenlife.machineState(req.params.code);
+  res.json({ ok: data.state === 0, ...data });
+}));
 
-  if (matchKeyword(userText, ["商城", "商品", "購買", "買東西", "甜點", "飲料"])) {
-    return replyMessage(event.replyToken, shopMessage());
-  }
+app.get('/api/commodities', safeAsync(async (req, res) => {
+  const data = await tenlife.commodities({ commodityCode: req.query.commodityCode, commodityID: req.query.commodityID });
+  res.json({ ok: data.state === 0, ...data });
+}));
 
-  if (matchKeyword(userText, ["據點", "位置", "地圖", "導航", "機台", "在哪", "地址", "附近"])) {
-    return replyMessage(event.replyToken, locationMessage());
-  }
+app.get('/api/machines/:code/inventory', safeAsync(async (req, res) => {
+  const [available, commodityData] = await Promise.all([
+    tenlife.orderMachineCommodity(req.params.code),
+    tenlife.commodities()
+  ]);
+  const productMap = new Map((commodityData.commodity || []).map((p) => [String(p.commodityCode), p]));
+  const items = (available.commodity || []).map((row) => {
+    const product = productMap.get(String(row.commodityCode)) || {};
+    return {
+      ...row,
+      commodityName: product.commodityName || row.commodityCode,
+      commodityTypeName: product.commodityTypeName || '',
+      brandName: product.brandName || '',
+      price: Number(product.price || 0),
+      photo: product.photo || '',
+      info1: product.info1 || ''
+    };
+  }).filter((x) => Number(x.quantity || 0) > 0);
+  res.json({ ok: available.state === 0, message: available.message || '', items });
+}));
 
-  if (matchKeyword(userText, ["缺貨", "補貨", "沒貨", "商品沒了"])) {
-    return replyMessage(event.replyToken, stockMessage());
-  }
-
-  if (matchKeyword(userText, ["報修", "故障", "卡貨", "未出貨", "付款異常", "取物門", "升降台", "履帶"])) {
-    return replyMessage(event.replyToken, repairMessage());
-  }
-
-  if (matchKeyword(userText, ["合作", "放機", "場地", "招商", "寄售"])) {
-    return replyMessage(event.replyToken, partnerMessage());
-  }
-
-  if (matchKeyword(userText, ["客服", "聯絡", "電話", "人工"])) {
-    return replyMessage(event.replyToken, customerServiceMessage());
-  }
-
-  return replyMessage(event.replyToken, mainMenuMessage());
-}
-
-function matchKeyword(text, keywords) {
-  return keywords.some(keyword => text.includes(keyword));
-}
-
-function replyMessage(replyToken, messages) {
-  return client.replyMessage({
-    replyToken,
-    messages: Array.isArray(messages) ? messages : [messages]
-  });
-}
-
-function textMessage(text) {
-  return { type: "text", text };
-}
-
-function welcomeMessage() {
-  return [
-    textMessage(
-      "歡迎來到「新刃智能販賣機商城」\n\n" +
-      "這裡可以查詢商品、機台地圖、缺貨回報、故障報修與合作放機。\n\n" +
-      "請點選下方功能，或直接輸入：商城、據點、缺貨、報修、合作、客服"
-    ),
-    mainMenuFlex()
-  ];
-}
-
-function mainMenuMessage() {
-  return [
-    textMessage("請選擇您需要的服務。"),
-    mainMenuFlex()
-  ];
-}
-
-function mainMenuFlex() {
-  return {
-    type: "flex",
-    altText: "新刃智能販賣機商城主選單",
-    contents: {
-      type: "bubble",
-      size: "mega",
-      header: {
-        type: "box",
-        layout: "vertical",
-        contents: [
-          { type: "text", text: "新刃智能販賣機商城", weight: "bold", size: "xl", color: "#111111" },
-          { type: "text", text: "Otto 智能販賣機服務中心", size: "sm", color: "#666666", margin: "sm" }
-        ]
-      },
-      body: {
-        type: "box",
-        layout: "vertical",
-        spacing: "md",
-        contents: [
-          menuButton("商品商城", "查看販賣機商品", "商城"),
-          menuButton("機台地圖", "像租車據點一樣選機台導航", "據點"),
-          menuButton("缺貨回報", "回報商品缺貨", "缺貨"),
-          menuButton("故障報修", "卡貨、付款異常、未出貨", "報修"),
-          menuButton("合作放機", "申請場地合作", "合作"),
-          menuButton("聯絡客服", "找人工客服協助", "客服")
-        ]
-      }
+app.get('/api/products/availability', safeAsync(async (req, res) => {
+  const machines = await tenlife.listMachines();
+  const commodityData = await tenlife.commodities();
+  const productMap = new Map((commodityData.commodity || []).map((p) => [String(p.commodityCode), p]));
+  const all = [];
+  for (const machine of machines) {
+    const inv = await tenlife.orderMachineCommodity(machine.code);
+    for (const item of inv.commodity || []) {
+      if (req.query.commodityCode && String(item.commodityCode) !== String(req.query.commodityCode)) continue;
+      const product = productMap.get(String(item.commodityCode)) || {};
+      all.push({
+        machine,
+        commodityCode: item.commodityCode,
+        commodityID: item.commodityID,
+        quantity: item.quantity,
+        commodityName: product.commodityName || item.commodityCode,
+        price: Number(product.price || 0),
+        commodityTypeName: product.commodityTypeName || '',
+        brandName: product.brandName || '',
+        photo: product.photo || ''
+      });
     }
+  }
+  res.json({ ok: true, items: all });
+}));
+
+app.post('/api/orders/lock', safeAsync(async (req, res) => {
+  const { machineCode, items } = req.body;
+  if (!machineCode) return res.status(400).json({ ok: false, message: '缺少 machineCode' });
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok: false, message: '缺少商品 items' });
+
+  const shelflife = formatDateTime(addMinutes(new Date(), 15));
+  const commodity = items.map((item) => ({
+    commodityCode: item.commodityCode,
+    quantity: Number(item.quantity || 1),
+    price: ''
+  }));
+  const result = await tenlife.lockOrder({ code: machineCode, shelflife, commodity });
+  if (result.state !== 0) return res.status(400).json({ ok: false, message: result.message || '預訂鎖定失敗', raw: result });
+
+  const machines = await tenlife.listMachines();
+  const machine = machines.find((m) => m.code === machineCode) || { code: machineCode, name: machineCode };
+  const localOrder = {
+    id: result.id,
+    machine,
+    items,
+    amount: items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0),
+    status: 'WAITING_PAYMENT',
+    shelflife,
+    createdAt: new Date().toISOString(),
+    qrDataUrl: null
   };
-}
+  pendingOrders.set(result.id, localOrder);
+  res.json({ ok: true, order: localOrder, raw: result });
+}));
 
-function menuButton(label, description, messageText) {
-  return {
-    type: "box",
-    layout: "vertical",
-    paddingAll: "12px",
-    backgroundColor: "#F5F5F5",
-    cornerRadius: "md",
-    action: { type: "message", label, text: messageText },
-    contents: [
-      { type: "text", text: label, weight: "bold", size: "md", color: "#111111" },
-      { type: "text", text: description, size: "sm", color: "#666666", margin: "xs" }
-    ]
-  };
-}
+app.post('/api/orders/:id/mock-pay', safeAsync(async (req, res) => {
+  const order = pendingOrders.get(req.params.id);
+  if (!order) return res.status(404).json({ ok: false, message: '找不到訂單，可能服務重啟或訂單已過期' });
+  const confirm = await tenlife.createOrder(req.params.id);
+  if (confirm.state !== 0) return res.status(400).json({ ok: false, message: confirm.message || '訂單生效失敗', raw: confirm });
+  order.status = 'ACTIVE';
+  order.paidAt = new Date().toISOString();
+  order.qrDataUrl = await QRCode.toDataURL(req.params.id, { margin: 1, width: 260 });
+  pendingOrders.set(order.id, order);
+  res.json({ ok: true, order, raw: confirm });
+}));
 
-function shopMessage() {
-  return [
-    textMessage("請點選下方按鈕進入商品商城。"),
-    {
-      type: "template",
-      altText: "商品商城",
-      template: {
-        type: "buttons",
-        title: "新刃智能販賣機商城",
-        text: "查看販賣機商品",
-        actions: [{ type: "uri", label: "進入商品商城", uri: SHOP_URL }]
-      }
-    }
-  ];
-}
+app.post('/api/orders/:id/cancel', safeAsync(async (req, res) => {
+  const result = await tenlife.unlockOrder(req.params.id);
+  const order = pendingOrders.get(req.params.id);
+  if (order) {
+    order.status = 'CANCELLED';
+    pendingOrders.set(order.id, order);
+  }
+  res.json({ ok: result.state === 0, message: result.message || '', order, raw: result });
+}));
 
-function locationMessage() {
-  return [
-    textMessage("請點選下方按鈕開啟機台地圖。打開後可以像租車據點一樣，直接在地圖上選擇要前往的販賣機。"),
-    {
-      type: "template",
-      altText: "機台地圖",
-      template: {
-        type: "buttons",
-        title: "機台地圖",
-        text: "查看附近機台並選擇導航",
-        actions: [
-          { type: "uri", label: "開啟機台地圖", uri: LOCATION_URL },
-          { type: "message", label: "故障報修", text: "報修" },
-          { type: "message", label: "缺貨回報", text: "缺貨" }
-        ]
-      }
-    }
-  ];
-}
+app.get('/api/orders/:id', safeAsync(async (req, res) => {
+  const order = pendingOrders.get(req.params.id);
+  if (!order) return res.status(404).json({ ok: false, message: '找不到本機暫存訂單，請用交易查詢確認領取狀態' });
+  res.json({ ok: true, order });
+}));
 
-function stockMessage() {
-  return [
-    textMessage(
-      "缺貨回報格式：\n\n" +
-      "機台編號：\n" +
-      "缺貨商品：\n" +
-      "貨道編號：\n" +
-      "現場照片：\n\n" +
-      "也可以點下方按鈕填寫表單。"
-    ),
-    {
-      type: "template",
-      altText: "缺貨回報",
-      template: {
-        type: "buttons",
-        title: "缺貨回報",
-        text: "請填寫缺貨回報表單",
-        actions: [{ type: "uri", label: "填寫缺貨回報", uri: STOCK_FORM_URL }]
-      }
-    }
-  ];
-}
+app.get('/api/orders', safeAsync(async (req, res) => {
+  res.json({ ok: true, orders: Array.from(pendingOrders.values()).sort((a,b) => b.createdAt.localeCompare(a.createdAt)) });
+}));
 
-function repairMessage() {
-  return [
-    textMessage(
-      "故障報修格式：\n\n" +
-      "機台編號：\n" +
-      "問題類型：卡貨／付款異常／未出貨／取物門異常／其他\n" +
-      "發生時間：\n" +
-      "付款方式：\n" +
-      "照片或付款紀錄：\n\n" +
-      "也可以點下方按鈕填寫表單。"
-    ),
-    {
-      type: "template",
-      altText: "故障報修",
-      template: {
-        type: "buttons",
-        title: "故障報修",
-        text: "請選擇報修方式",
-        actions: [
-          { type: "uri", label: "填寫故障報修", uri: REPAIR_FORM_URL },
-          { type: "message", label: "卡貨／未出貨", text: "我要報修：卡貨或未出貨" },
-          { type: "message", label: "付款異常", text: "我要報修：付款異常" }
-        ]
-      }
-    }
-  ];
-}
+app.get('/api/tenlife/active-orders', safeAsync(async (req, res) => {
+  const data = await tenlife.activeOrders(req.query.code);
+  res.json({ ok: data.state === 0, ...data });
+}));
 
-function partnerMessage() {
-  return [
-    textMessage(
-      "歡迎申請智能販賣機合作放置。\n\n" +
-      "請提供：店名／公司名、預計放置地址、場地類型、每日人流、是否可提供電源、聯絡人與電話。"
-    ),
-    {
-      type: "template",
-      altText: "合作放機",
-      template: {
-        type: "buttons",
-        title: "合作放機申請",
-        text: "申請放置新刃智能販賣機",
-        actions: [{ type: "uri", label: "填寫合作申請", uri: PARTNER_FORM_URL }]
-      }
-    }
-  ];
-}
+app.get('/api/tenlife/order-list', safeAsync(async (req, res) => {
+  const now = new Date();
+  const begin = req.query.begin || formatDate(new Date(now.getTime() - 30 * 86400000));
+  const end = req.query.end || formatDate(now);
+  const data = await tenlife.orderList({ begin, end, code: req.query.code, future: req.query.future || 1 });
+  res.json({ ok: data.state === 0, ...data });
+}));
 
-function customerServiceMessage() {
-  return textMessage(
-    "您好，請直接留下您的問題。\n\n" +
-    "若是機台問題，請提供機台編號、機台位置、問題描述、現場照片或付款紀錄。"
-  );
-}
+app.get('/api/tenlife/sales', safeAsync(async (req, res) => {
+  const data = await tenlife.sales(req.query);
+  res.json({ ok: data.state === 0, ...data });
+}));
 
-const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`新刃智能販賣機商城 LINE Bot running on port ${port}`);
+  console.log(`新刃智能販賣機商城 V6 running on port ${port}`);
+  console.log(`Tenlife credentials configured: ${tenlife.hasCredentials()}`);
 });
