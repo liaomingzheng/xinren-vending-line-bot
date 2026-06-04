@@ -139,7 +139,41 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
 app.get('/api/config', (req, res) => {
   res.json({ ok: true, hasTenlifeCredentials: tenlife.hasCredentials(), appBaseUrl: appBase(req), paymentMode: process.env.PAYMENT_MODE || 'mock' });
 });
+app.get("/debug/sign", (req, res) => {
+  try {
+    const params = {
+      company: process.env.TENLIFE_COMPANY || ""
+    };
 
+    if (req.query.code) {
+      params.code = req.query.code;
+    }
+
+    const baseString = tenlife.buildSignBaseString(params);
+    const sign = tenlife.buildSign(params);
+
+    const token = process.env.TENLIFE_TOKEN || "";
+    const maskedToken =
+      token.length > 8
+        ? `${token.slice(0, 4)}********${token.slice(-4)}`
+        : "未設定或過短";
+
+    res.json({
+      ok: true,
+      note: "這是簽章測試，Token 已遮蔽。",
+      params,
+      baseString,
+      signStringPreview: `${baseString}${maskedToken}`,
+      sign,
+      exampleUrl: `${process.env.TENLIFE_API_BASE || "https://api.tenlifeservice.com"}/Machine.aspx?${baseString}&sign=${sign}`
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
 app.get('/api/machines', safeAsync(async (req, res) => {
   const machines = await tenlife.listMachines();
   res.json({ ok: true, machines });
