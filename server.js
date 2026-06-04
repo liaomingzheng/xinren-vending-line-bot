@@ -139,63 +139,12 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
 app.get('/api/config', (req, res) => {
   res.json({ ok: true, hasTenlifeCredentials: tenlife.hasCredentials(), appBaseUrl: appBase(req), paymentMode: process.env.PAYMENT_MODE || 'mock' });
 });
-app.get("/debug/sign", (req, res) => {
-  try {
-    const params = {
-      company: process.env.TENLIFE_COMPANY || ""
-    };
 
-    if (req.query.code) {
-      params.code = req.query.code;
-    }
-
-    const baseString = tenlife.buildSignBaseString(params);
-    const sign = tenlife.buildSign(params);
-
-    const token = process.env.TENLIFE_TOKEN || "";
-    const maskedToken =
-      token.length > 8
-        ? `${token.slice(0, 4)}********${token.slice(-4)}`
-        : "未設定或過短";
-
-    res.json({
-      ok: true,
-      note: "這是簽章測試，Token 已遮蔽。",
-      params,
-      baseString,
-      signStringPreview: `${baseString}${maskedToken}`,
-      sign,
-      exampleUrl: `${process.env.TENLIFE_API_BASE || "https://api.tenlifeservice.com"}/Machine.aspx?${baseString}&sign=${sign}`
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      message: error.message
-    });
-  }
-});
 app.get('/api/machines', safeAsync(async (req, res) => {
   const machines = await tenlife.listMachines();
   res.json({ ok: true, machines });
 }));
-app.get("/api/machines/:code/orderable-inventory", async (req, res) => {
-  try {
-    const code = req.params.code;
-    const data = await tenlife.listOrderableInventory(code);
 
-    res.json({
-      ok: true,
-      code,
-      inventory: data
-    });
-  } catch (error) {
-    console.error("orderable inventory error:", error);
-    res.status(500).json({
-      ok: false,
-      message: error.message
-    });
-  }
-});
 app.get('/api/machines/:code/state', safeAsync(async (req, res) => {
   const data = await tenlife.machineState(req.params.code);
   res.json({ ok: data.state === 0, ...data });
@@ -206,51 +155,97 @@ app.get('/api/commodities', safeAsync(async (req, res) => {
   res.json({ ok: data.state === 0, ...data });
 }));
 
-app.get('/api/machines/:code/inventory', safeAsync(async (req, res) => {
-  const [available, commodityData] = await Promise.all([
-    tenlife.orderMachineCommodity(req.params.code),
-    tenlife.commodities()
+
+const commodityCache = { time: 0, data: null };
+
+function withTimeout(promise, ms, label = 'API timeout') {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(label)), ms))
   ]);
-  const productMap = new Map((commodityData.commodity || []).map((p) => [String(p.commodityCode), p]));
-  const items = (available.commodity || []).map((row) => {
+}
+
+function photoUrl(photo) {
+  if (!photo) return '';
+  const value = String(photo).trim();
+  if (!value) return '';
+  if (/^https?:\/\//i.test(value)) return value;
+  const base = (process.env.TENLIFE_IMAGE_BASE || '').replace(/\/$/, '');
+  return base ? `${base}/${encodeURIComponent(value)}` : '';
+}
+
+async function getCommodityMap() {
+  const now = Date.now();
+  if (commodityCache.data && now - commodityCache.time < 120000) return commodityCache.data;
+  const commodityData = await tenlife.commodities();
+  const map = new Map((commodityData.commodity || []).map((p) => [String(p.commodityCode), p]));
+  commodityCache.time = now;
+  commodityCache.data = map;
+  return map;
+}
+
+function normalizeInventoryItems(rows, productMap) {
+  return (rows || []).map((row) => {
     const product = productMap.get(String(row.commodityCode)) || {};
+    const photo = product.bigPhoto || product.photo || row.bigPhoto || row.photo || '';
     return {
       ...row,
-      commodityName: product.commodityName || row.commodityCode,
-      commodityTypeName: product.commodityTypeName || '',
-      brandName: product.brandName || '',
-      price: Number(product.price || 0),
-      photo: product.photo || '',
-      info1: product.info1 || ''
+      commodityName: product.commodityName || row.commodityName || row.commodityCode,
+      commodityTypeName: product.commodityTypeName || row.commodityTypeName || '',
+      brandName: product.brandName || row.brandName || '',
+      price: Number(product.price || row.price || 0),
+      photo: photo,
+      photoUrl: photoUrl(photo),
+      info1: product.info1 || row.info1 || ''
     };
   }).filter((x) => Number(x.quantity || 0) > 0);
-  res.json({ ok: available.state === 0, message: available.message || '', items });
+}
+
+app.get('/api/machines/:code/inventory', safeAsync(async (req, res) => {
+  const [available, productMap] = await Promise.all([
+    withTimeout(tenlife.orderMachineCommodity(req.params.code), 12000, '查詢單台庫存逾時'),
+    getCommodityMap()
+  ]);
+  const items = normalizeInventoryItems(available.commodity || [], productMap);
+  res.json({ ok: available.state === 0, message: available.message || '', items, raw: available });
+}));
+
+app.get('/api/machines/:code/orderable-inventory', safeAsync(async (req, res) => {
+  const [available, productMap] = await Promise.all([
+    withTimeout(tenlife.orderMachineCommodity(req.params.code), 12000, '查詢單台可預訂庫存逾時'),
+    getCommodityMap()
+  ]);
+  const items = normalizeInventoryItems(available.commodity || [], productMap);
+  res.json({ ok: available.state === 0, code: req.params.code, message: available.message || '', items, raw: available });
 }));
 
 app.get('/api/products/availability', safeAsync(async (req, res) => {
   const machines = await tenlife.listMachines();
-  const commodityData = await tenlife.commodities();
-  const productMap = new Map((commodityData.commodity || []).map((p) => [String(p.commodityCode), p]));
+  const productMap = await getCommodityMap();
+  const onlyCode = req.query.commodityCode ? String(req.query.commodityCode) : '';
+  const timeoutMs = Number(req.query.timeout || 10000);
   const all = [];
-  for (const machine of machines) {
-    const inv = await tenlife.orderMachineCommodity(machine.code);
-    for (const item of inv.commodity || []) {
-      if (req.query.commodityCode && String(item.commodityCode) !== String(req.query.commodityCode)) continue;
-      const product = productMap.get(String(item.commodityCode)) || {};
-      all.push({
-        machine,
-        commodityCode: item.commodityCode,
-        commodityID: item.commodityID,
-        quantity: item.quantity,
-        commodityName: product.commodityName || item.commodityCode,
-        price: Number(product.price || 0),
-        commodityTypeName: product.commodityTypeName || '',
-        brandName: product.brandName || '',
-        photo: product.photo || ''
-      });
+  const failed = [];
+
+  const tasks = machines.map(async (machine) => {
+    try {
+      const inv = await withTimeout(tenlife.orderMachineCommodity(machine.code), timeoutMs, `機台 ${machine.code} 查詢逾時`);
+      if (inv.state !== 0) {
+        failed.push({ code: machine.code, name: machine.name, message: inv.message || '查詢失敗' });
+        return;
+      }
+      const items = normalizeInventoryItems(inv.commodity || [], productMap);
+      for (const item of items) {
+        if (onlyCode && String(item.commodityCode) !== onlyCode) continue;
+        all.push({ ...item, machine });
+      }
+    } catch (error) {
+      failed.push({ code: machine.code, name: machine.name, message: error.message });
     }
-  }
-  res.json({ ok: true, items: all });
+  });
+
+  await Promise.allSettled(tasks);
+  res.json({ ok: true, items: all, machinesChecked: machines.length, failed });
 }));
 
 app.post('/api/orders/lock', safeAsync(async (req, res) => {

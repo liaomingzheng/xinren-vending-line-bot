@@ -1,317 +1,236 @@
-"use strict";
+const crypto = require('crypto');
 
-/**
- * services/tenlifeApi.js
- * 天來 TENLife API client
- *
- * 重點：
- * 1. sign 計算前，不包含 sign 本身。
- * 2. 參數名稱依 ASCII 由小到大排序，大小寫敏感。
- * 3. 排序後串成 key=value&key=value。
- * 4. 字串最後直接接 TokenKey，不是 &token=xxx。
- * 5. 做 SHA256，輸出 64 碼小寫 hex。
- * 6. GET / POST query 參數都使用同一套簽章規則。
- * 7. POST 的 JSON body，例如 commodity，不放進 query sign；依文件 POST 範例 B，body 與 query 分開。
- */
+const API_BASE = process.env.TENLIFE_API_BASE || 'https://api.tenlifeservice.com';
+const COMPANY = process.env.TENLIFE_COMPANY || '';
+const TOKEN = process.env.TENLIFE_TOKEN || '';
 
-const crypto = require("crypto");
+const DEMO_PRODUCTS = [
+  { commodityID: 2030713, commodityCode: 'CNNPDC122802', commodityName: '櫻花 Hello Kitty 娃包 1', commodityTypeName: 'IP 娃', brandName: 'Otto', price: 499, photo: '', stop: 0 },
+  { commodityID: 2027280, commodityCode: '999998', commodityName: 'demo1', commodityTypeName: 'test', brandName: 'M', price: 1, photo: '', stop: 0 },
+  { commodityID: 3000001, commodityCode: 'DRINK001', commodityName: '可口可樂 600ml', commodityTypeName: '飲料', brandName: 'Coca-Cola', price: 30, photo: '', stop: 0 },
+  { commodityID: 3000002, commodityCode: 'TEA001', commodityName: '原萃綠茶 580ml', commodityTypeName: '飲料', brandName: '原萃', price: 25, photo: '', stop: 0 }
+];
 
-const DEFAULT_API_BASE = "https://api.tenlifeservice.com";
-
-function getConfig() {
-  const apiBase = (process.env.TENLIFE_API_BASE || DEFAULT_API_BASE).replace(/\/$/, "");
-  const company = process.env.TENLIFE_COMPANY;
-  const token = process.env.TENLIFE_TOKEN;
-
-  if (!company) {
-    throw new Error("Missing environment variable: TENLIFE_COMPANY");
+const LOCAL_MACHINES = [
+  {
+    code: 'F6380162C464EF',
+    name: 'Otto 黑色機臺',
+    area: '南投埔里',
+    address: '南投縣埔里鎮桃迷里大學路一號',
+    mapUrl: 'https://maps.app.goo.gl/2bX5Xt6S8NXAEk9D7',
+    lat: 23.9506,
+    lng: 120.9289,
+    note: '1樓大廳／門口右側'
+  },
+  {
+    code: 'F638C49405968C',
+    name: 'Otto 藍色機臺',
+    area: '南投埔里',
+    address: '南投縣埔里鎮桃迷里大學路一號',
+    mapUrl: 'https://maps.app.goo.gl/2bX5Xt6S8NXAEk9D7',
+    lat: 23.9507,
+    lng: 120.9291,
+    note: '1樓大廳／門口右側'
+  },
+  {
+    code: 'F638C3B40B65CC',
+    name: 'Otto 男宿',
+    area: '高雄大樹',
+    address: '高雄市大樹區三和里學城路一段1號',
+    mapUrl: 'https://maps.app.goo.gl/9x3eaFvodGGbGYf3A',
+    lat: 22.7288,
+    lng: 120.4058,
+    note: '男宿'
+  },
+  {
+    code: 'F638C41405C535',
+    name: 'Otto 綜合教學大樓',
+    area: '高雄大樹',
+    address: '高雄市大樹區三和里學城路一段1號',
+    mapUrl: 'https://maps.app.goo.gl/9x3eaFvodGGbGYf3A',
+    lat: 22.7291,
+    lng: 120.4061,
+    note: '綜合教學大樓'
   }
-  if (!token) {
-    throw new Error("Missing environment variable: TENLIFE_TOKEN");
-  }
+];
 
-  return { apiBase, company, token };
+function hasCredentials() {
+  return Boolean(COMPANY && TOKEN && API_BASE);
 }
 
-function shouldIncludeValue(value) {
-  return value !== undefined && value !== null;
-}
-
-function normalizeValue(value) {
-  if (value instanceof Date) return formatDateTime(value);
-  return String(value);
-}
-
-/**
- * 依文件規則產生簽章用原始字串。
- * 注意：這裡刻意不做 encodeURIComponent，避免空白被轉成 + 或 %20 後造成 sign 不一致。
- * 若之後設備商要求「簽章前也要 UrlEncode 非 ASCII value」，只要把此處 value 改成 encodeURIComponent(value) 即可。
- */
-function buildSignBaseString(params) {
-  return Object.keys(params)
-    .filter((key) => key !== "sign" && key !== "SIGN" && shouldIncludeValue(params[key]))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-    .map((key) => `${key}=${normalizeValue(params[key])}`)
-    .join("&");
-}
-
-function buildSign(params, token) {
-  const base = buildSignBaseString(params);
-  return crypto
-    .createHash("sha256")
-    .update(base + token, "utf8")
-    .digest("hex");
-}
-
-function appendSign(params, token) {
+function signParams(params) {
   const clean = {};
   for (const [key, value] of Object.entries(params || {})) {
-    if (shouldIncludeValue(value)) clean[key] = normalizeValue(value);
+    if (value !== undefined && value !== null && value !== '') clean[key] = String(value);
   }
-  clean.sign = buildSign(clean, token);
-  return clean;
+  const sortedKeys = Object.keys(clean).sort();
+  const signString = sortedKeys.map((key) => `${key}=${clean[key]}`).join('&') + TOKEN;
+  return crypto.createHash('sha256').update(signString, 'utf8').digest('hex');
 }
 
-function toQueryString(params) {
-  const searchParams = new URLSearchParams();
-  for (const key of Object.keys(params)) {
-    if (shouldIncludeValue(params[key])) searchParams.append(key, normalizeValue(params[key]));
+function buildUrl(path, params = {}) {
+  const queryParams = { ...params, company: COMPANY };
+  queryParams.sign = signParams(queryParams);
+  const url = new URL(path, API_BASE);
+  for (const [key, value] of Object.entries(queryParams)) {
+    if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
-  return searchParams.toString();
+  return url.toString();
 }
 
-async function requestTenlife(pathname, options = {}) {
-  const { apiBase, company, token } = getConfig();
-  const method = (options.method || "GET").toUpperCase();
-  const query = {
-    ...(options.query || {}),
-    company
+async function requestGet(path, params = {}) {
+  if (!hasCredentials()) throw new Error('尚未設定 TENLIFE_COMPANY / TENLIFE_TOKEN');
+  const url = buildUrl(path, params);
+  const res = await fetch(url, { method: 'GET' });
+  const text = await res.text();
+  try { return JSON.parse(text); } catch (err) { throw new Error(`Tenlife 回傳不是 JSON：${text.slice(0, 300)}`); }
+}
+
+async function requestPost(path, query = {}, body = undefined) {
+  if (!hasCredentials()) throw new Error('尚未設定 TENLIFE_COMPANY / TENLIFE_TOKEN');
+  const url = buildUrl(path, query);
+  const options = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' }
   };
+  if (body !== undefined) options.body = JSON.stringify(body);
+  const res = await fetch(url, options);
+  const text = await res.text();
+  try { return JSON.parse(text); } catch (err) { throw new Error(`Tenlife 回傳不是 JSON：${text.slice(0, 300)}`); }
+}
 
-  const signedQuery = appendSign(query, token);
-  const url = `${apiBase}/${String(pathname).replace(/^\//, "")}?${toQueryString(signedQuery)}`;
-
-  const fetchOptions = {
-    method,
-    headers: {
-      "Accept": "application/json",
-      ...(options.headers || {})
-    }
+function mergeMachineInfo(apiMachine = {}) {
+  const local = LOCAL_MACHINES.find((m) => m.code === apiMachine.code) || {};
+  return {
+    ...apiMachine,
+    ...local,
+    name: local.name || apiMachine.name || apiMachine.code,
+    code: apiMachine.code || local.code
   };
+}
 
-  if (method === "POST") {
-    if (options.body !== undefined && options.body !== null) {
-      fetchOptions.headers["Content-Type"] = "application/json; charset=utf-8";
-      fetchOptions.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
-    } else {
-      fetchOptions.headers["Content-Type"] = "application/x-www-form-urlencoded";
-      fetchOptions.body = "";
+function validTaiwanLatLng(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  return Number.isFinite(la) && Number.isFinite(ln) && la >= 21 && la <= 26 && ln >= 119 && ln <= 123;
+}
+
+async function listMachines() {
+  if (!hasCredentials()) return LOCAL_MACHINES;
+  const data = await requestGet('/Machine.aspx');
+  if (data.state !== 0) throw new Error(data.message || '查詢智販機列表失敗');
+  const apiMachines = Array.isArray(data.machine) ? data.machine : [];
+  const seen = new Set();
+  const merged = [];
+
+  for (const apiMachine of apiMachines) {
+    const local = LOCAL_MACHINES.find((m) => m.code === apiMachine.code) || {};
+    const row = mergeMachineInfo(apiMachine);
+    const apiLat = apiMachine.latitude || apiMachine.lat;
+    const apiLng = apiMachine.longitude || apiMachine.lng;
+    if (!local.lat && validTaiwanLatLng(apiLat, apiLng)) {
+      row.lat = Number(apiLat);
+      row.lng = Number(apiLng);
     }
+    if (!local.mapUrl && row.lat && row.lng) row.mapUrl = `https://www.google.com/maps/search/?api=1&query=${row.lat},${row.lng}`;
+    merged.push(row);
+    seen.add(row.code);
   }
 
-  const response = await fetch(url, fetchOptions);
-  const text = await response.text();
-
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch (error) {
-    throw new Error(`TENLife API returned non-JSON response. HTTP ${response.status}. Body: ${text.slice(0, 500)}`);
+  for (const local of LOCAL_MACHINES) {
+    if (!seen.has(local.code)) merged.push(local);
   }
+  return merged;
+}
 
-  if (!response.ok) {
-    throw new Error(`TENLife API HTTP ${response.status}: ${JSON.stringify(data)}`);
+async function machineState(code) {
+  if (!hasCredentials()) return { machine: [{ code, uploadTime: '', state: 'DEMO', temperature1: 0 }], state: 0, message: '' };
+  return requestGet('/MachineState.aspx', { code });
+}
+
+async function commodities(filters = {}) {
+  if (!hasCredentials()) return { commodity: DEMO_PRODUCTS, state: 0, message: '' };
+  return requestGet('/Commodity.aspx', filters);
+}
+
+async function machineCommodity(code) {
+  if (!hasCredentials()) {
+    return {
+      state: 0,
+      message: '',
+      commodity: [
+        { commodityCode: 'DRINK001', commodityID: 3000001, layer: 'A1', shelflife: '2026-12-31 23:59:59' },
+        { commodityCode: 'DRINK001', commodityID: 3000001, layer: 'A2', shelflife: '2026-12-31 23:59:59' },
+        { commodityCode: 'TEA001', commodityID: 3000002, layer: 'A3', shelflife: '2026-12-31 23:59:59' },
+        { commodityCode: 'CNNPDC122802', commodityID: 2030713, layer: 'B1', shelflife: '2026-12-31 23:59:59' }
+      ]
+    };
   }
-
-  return data;
+  return requestGet('/MachineCommodity.aspx', { code });
 }
 
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function formatDateTime(date) {
-  const d = date instanceof Date ? date : new Date(date);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-}
-
-function formatDate(date) {
-  const d = date instanceof Date ? date : new Date(date);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-
-function addMinutes(date, minutes) {
-  return new Date(date.getTime() + minutes * 60 * 1000);
-}
-
-// ========== 設備基本資訊 ==========
-
-async function getMachines() {
-  return requestTenlife("Machine.aspx", { method: "GET" });
-}
-
-async function getMachineState(code) {
-  return requestTenlife("MachineState.aspx", {
-    method: "GET",
-    query: code ? { code } : {}
-  });
-}
-
-async function getCommodities(filters = {}) {
-  const query = {};
-  if (filters.commodityCode) query.commodityCode = filters.commodityCode;
-  if (filters.commodityID) query.commodityID = filters.commodityID;
-  return requestTenlife("Commodity.aspx", { method: "GET", query });
-}
-
-async function getMachineInventory(code) {
-  if (!code) throw new Error("getMachineInventory requires machine code");
-  return requestTenlife("MachineCommodity.aspx", {
-    method: "GET",
-    query: { code }
-  });
-}
-
-async function getOrderableInventory(code) {
-  if (!code) throw new Error("getOrderableInventory requires machine code");
-  return requestTenlife("OrderMachineCommodity.aspx", {
-    method: "GET",
-    query: { code }
-  });
-}
-
-// ========== 交易相關 ==========
-
-async function getSales({ begin, end, code, commodityCode, saleID } = {}) {
-  if (!begin) throw new Error("getSales requires begin: YYYY-MM-DD hh:mm");
-  if (!end) throw new Error("getSales requires end: YYYY-MM-DD hh:mm");
-
-  const query = { begin, end };
-  if (code) query.code = code;
-  if (commodityCode) query.commodityCode = commodityCode;
-  if (saleID) query.saleID = saleID;
-
-  return requestTenlife("Sales.aspx", { method: "GET", query });
-}
-
-// ========== 預定相關 ==========
-
-/**
- * 即時預訂鎖定商品
- * @param {string} code 智販機編號
- * @param {Array<{commodityCode:string, quantity:number, price?:string|number}>} commodity
- * @param {string|Date} shelflife 預訂保留有效時間，格式 YYYY-MM-DD hh:mm:ss
- */
-async function lockOrder({ code, commodity, shelflife }) {
-  if (!code) throw new Error("lockOrder requires machine code");
-  if (!Array.isArray(commodity) || commodity.length === 0) {
-    throw new Error("lockOrder requires commodity array");
+async function orderMachineCommodity(code) {
+  if (!hasCredentials()) {
+    return { state: 0, message: '', commodity: [
+      { commodityCode: 'DRINK001', commodityID: 3000001, quantity: 8 },
+      { commodityCode: 'TEA001', commodityID: 3000002, quantity: 6 },
+      { commodityCode: 'CNNPDC122802', commodityID: 2030713, quantity: 2 },
+      { commodityCode: '999998', commodityID: 2027280, quantity: 1 }
+    ]};
   }
+  return requestGet('/OrderMachineCommodity.aspx', { code });
+}
 
-  const safeCommodity = commodity.map((item) => ({
-    commodityCode: String(item.commodityCode),
-    quantity: Number(item.quantity || 1),
-    price: item.price === undefined || item.price === null ? "" : String(item.price)
-  }));
+async function sales({ begin, end, code, commodityCode, saleID } = {}) {
+  if (!hasCredentials()) return { state: 0, message: '', sales: [] };
+  return requestGet('/Sales.aspx', { begin, end, code, commodityCode, saleID });
+}
 
-  return requestTenlife("OrderLockCommodity.aspx", {
-    method: "POST",
-    query: {
-      code,
-      shelflife: shelflife ? normalizeValue(shelflife) : formatDateTime(addMinutes(new Date(), 15))
-    },
-    body: {
-      commodity: safeCommodity
-    }
-  });
+async function lockOrder({ code, shelflife, commodity }) {
+  if (!hasCredentials()) return { state: 0, message: '', id: `DEMO-${Date.now()}` };
+  return requestPost('/OrderLockCommodity.aspx', { code, shelflife }, { commodity });
 }
 
 async function createOrder(id) {
-  if (!id) throw new Error("createOrder requires QRC id");
-  return requestTenlife("OrderCreate.aspx", {
-    method: "POST",
-    query: { id }
-  });
+  if (!hasCredentials()) return { state: 0, message: '' };
+  return requestPost('/OrderCreate.aspx', { id });
 }
 
 async function unlockOrder(id) {
-  if (!id) throw new Error("unlockOrder requires QRC id");
-  return requestTenlife("OrderUnlockCommodity.aspx", {
-    method: "POST",
-    query: { id }
-  });
+  if (!hasCredentials()) return { state: 0, message: '' };
+  return requestPost('/OrderUnlockCommodity.aspx', { id });
 }
 
 async function cancelOrder(id) {
-  if (!id) throw new Error("cancelOrder requires QRC id");
-  return requestTenlife("OrderCancel.aspx", {
-    method: "POST",
-    query: { id }
-  });
+  if (!hasCredentials()) return { state: 0, message: '' };
+  return requestPost('/OrderCancel.aspx', { id });
 }
 
-async function getActiveOrders(code) {
-  if (!code) throw new Error("getActiveOrders requires machine code");
-  return requestTenlife("ActiveOrderCreate.aspx", {
-    method: "GET",
-    query: { code }
-  });
+async function activeOrders(code) {
+  if (!hasCredentials()) return { state: 0, message: '', barcode: [] };
+  return requestGet('/ActiveOrderCreate.aspx', { code });
 }
 
-async function getOrderList({ begin, end, future = 1, code } = {}) {
-  if (!begin) throw new Error("getOrderList requires begin: YYYY-MM-DD");
-  if (!end) throw new Error("getOrderList requires end: YYYY-MM-DD");
-
-  const query = { begin, end, future };
-  if (code) query.code = code;
-
-  return requestTenlife("OrderList.aspx", { method: "GET", query });
+async function orderList({ begin, end, code, future = 1 } = {}) {
+  if (!hasCredentials()) return { state: 0, message: '', order: [] };
+  return requestGet('/OrderList.aspx', { begin, end, code, future });
 }
 
-// ========== 工具：可用於本機檢查 sign 是否符合文件範例 ==========
-
-function selfTestSignature() {
-  const sampleSign = buildSign(
-    { MerchantID: "0001", OrderID: "0123456" },
-    "TEST"
-  );
-
-  return {
-    signBase: buildSignBaseString({ MerchantID: "0001", OrderID: "0123456" }),
-    sign: sampleSign,
-    expected: "77b21395d6989067806d08c2b070853ad96508e7adcb79549746b90bc9690c48",
-    pass: sampleSign === "77b21395d6989067806d08c2b070853ad96508e7adcb79549746b90bc9690c48"
-  };
-}
-function hasCredentials() {
-  return Boolean(
-    process.env.TENLIFE_API_BASE &&
-    process.env.TENLIFE_COMPANY &&
-    process.env.TENLIFE_TOKEN
-  );
-}
 module.exports = {
+  LOCAL_MACHINES,
+  DEMO_PRODUCTS,
   hasCredentials,
-  buildSignBaseString,
-  buildSign,
-  appendSign,
-  toQueryString,
-  requestTenlife,
-  formatDate,
-  formatDateTime,
-  getMachines,
-  getMachineState,
-  getCommodities,
-  getMachineInventory,
-  getOrderableInventory,
-  getSales,
+  signParams,
+  listMachines,
+  machineState,
+  commodities,
+  machineCommodity,
+  orderMachineCommodity,
+  sales,
   lockOrder,
   createOrder,
   unlockOrder,
   cancelOrder,
-  listMachines: getMachines,
-  listMachineState: getMachineState,
-  listCommodities: getCommodities,
-  listMachineInventory: getMachineInventory,
-  listOrderableInventory: getOrderableInventory,
+  activeOrders,
+  orderList
 };

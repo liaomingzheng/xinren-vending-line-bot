@@ -1,15 +1,27 @@
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.ok === false) throw new Error(data.message || '操作失敗');
-  return data;
+  const timeout = options.timeout || 20000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      signal: controller.signal,
+      body: options.body ? JSON.stringify(options.body) : undefined
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) throw new Error(data.message || '操作失敗');
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('API 查詢逾時，請稍後再試');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function money(n) { return `$${Number(n || 0).toLocaleString('zh-TW')}`; }
+function productImage(url) { return url ? `<img class="product-img" src="${escapeHtml(url)}" onerror="this.style.display='none'">` : `<div class="product-img placeholder">商品</div>`; }
 function el(id) { return document.getElementById(id); }
 function setHTML(id, html) { el(id).innerHTML = html; }
 function escapeHtml(s='') { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
@@ -71,11 +83,15 @@ async function initHome() {
 
 async function initMachinePage() {
   setHTML('machineList', '<div class="loader">載入機台中...</div>');
-  const data = await api('/api/machines');
-  state.machines = data.machines || [];
-  initMap();
-  renderMachines(state.machines);
-  if (state.machines[0]) selectMachine(state.machines[0].code, false);
+  try {
+    const data = await api('/api/machines');
+    state.machines = Array.isArray(data.machines) ? data.machines : (data.machines?.machine || []);
+    initMap();
+    renderMachines(state.machines);
+    if (state.machines[0]) selectMachine(state.machines[0].code, false);
+  } catch (error) {
+    setHTML('machineList', `<div class="notice error">機台載入失敗：${escapeHtml(error.message)}</div>`);
+  }
 }
 
 function initMap() {
@@ -129,23 +145,30 @@ async function selectMachine(code, scroll = true) {
 
 async function loadMachineInventory(code) {
   setHTML('products', '<div class="loader">查詢庫存 API 中...</div>');
-  const data = await api(`/api/machines/${encodeURIComponent(code)}/inventory`);
-  state.products = data.items || [];
-  renderProductList();
+  try {
+    const data = await api(`/api/machines/${encodeURIComponent(code)}/orderable-inventory`, { timeout: 20000 });
+    state.products = data.items || [];
+    renderProductList();
+  } catch (error) {
+    setHTML('products', `<div class="notice error">庫存載入失敗：${escapeHtml(error.message)}<br>請稍後再試，或改用其他機台。</div>`);
+  }
 }
 
 function renderProductList() {
   const html = (state.products || []).map(p => {
     const inCart = state.cart.get(p.commodityCode)?.quantity || 0;
     return `
-      <div class="product-card">
-        <div class="row"><div><strong>${escapeHtml(p.commodityName)}</strong><div class="muted">${escapeHtml(p.commodityTypeName || p.brandName || p.commodityCode)}</div></div><div class="price">${money(p.price)}</div></div>
-        <div class="muted">可預訂庫存：${p.quantity ?? '-'}　商品編號：${escapeHtml(p.commodityCode)}</div>
-        <div class="row" style="margin-top:10px">
-          <span>${inCart ? `已選 ${inCart}` : ''}</span>
-          <div class="qty">
-            <button onclick="removeFromCart('${escapeHtml(p.commodityCode)}')">−</button>
-            <button onclick='addToCart(${JSON.stringify({commodityCode:p.commodityCode, commodityName:p.commodityName, price:p.price, quantity:1}).replace(/'/g,"&#39;")})'>＋</button>
+      <div class="product-card product-card-with-img">
+        ${productImage(p.photoUrl)}
+        <div class="product-main">
+          <div class="row"><div><strong>${escapeHtml(p.commodityName)}</strong><div class="muted">${escapeHtml(p.commodityTypeName || p.brandName || p.commodityCode)}</div></div><div class="price">${money(p.price)}</div></div>
+          <div class="muted">可預訂庫存：${p.quantity ?? '-'}　商品編號：${escapeHtml(p.commodityCode)}</div>
+          <div class="row" style="margin-top:10px">
+            <span>${inCart ? `已選 ${inCart}` : ''}</span>
+            <div class="qty">
+              <button onclick="removeFromCart('${escapeHtml(p.commodityCode)}')">−</button>
+              <button onclick='addToCart(${JSON.stringify({commodityCode:p.commodityCode, commodityName:p.commodityName, price:p.price, quantity:1}).replace(/'/g,"&#39;")})'>＋</button>
+            </div>
           </div>
         </div>
       </div>
@@ -156,35 +179,50 @@ function renderProductList() {
 }
 
 async function initProductPage() {
-  setHTML('productList', '<div class="loader">查詢全部庫存 API 中...</div>');
-  const data = await api('/api/products/availability');
-  const grouped = new Map();
-  (data.items || []).forEach(x => {
-    const key = x.commodityCode;
-    const old = grouped.get(key) || { ...x, total: 0, machines: [] };
-    old.total += Number(x.quantity || 0);
-    old.machines.push(x.machine);
-    grouped.set(key, old);
-  });
-  state.products = Array.from(grouped.values());
-  renderProductChoices();
+  setHTML('productList', '<div class="loader">逐台查詢可預訂庫存中，請稍候...</div>');
+  try {
+    const data = await api('/api/products/availability', { timeout: 30000 });
+    const grouped = new Map();
+    (data.items || []).forEach(x => {
+      const key = x.commodityCode;
+      const old = grouped.get(key) || { ...x, total: 0, machines: [] };
+      old.total += Number(x.quantity || 0);
+      old.machines.push(x.machine);
+      grouped.set(key, old);
+    });
+    state.products = Array.from(grouped.values()).sort((a,b)=>String(a.commodityName).localeCompare(String(b.commodityName), 'zh-Hant'));
+    renderProductChoices(data.failed || []);
+  } catch (error) {
+    setHTML('productList', `<div class="notice error">商品庫存載入失敗：${escapeHtml(error.message)}<br>建議先使用「照設備訂購」。</div><a class="btn primary block" href="/order-by-machine.html">改用照設備訂購</a>`);
+  }
 }
 
-function renderProductChoices() {
-  setHTML('productList', state.products.map(p => `
-    <div class="product-card" onclick="showMachinesForProduct('${escapeHtml(p.commodityCode)}')">
-      <div class="row"><strong>${escapeHtml(p.commodityName)}</strong><span class="price">${money(p.price)}</span></div>
-      <div class="muted">總可預訂：${p.total}　有貨設備：${p.machines.length} 台</div>
-      <button class="btn primary" style="margin-top:10px">查看有貨設備</button>
+function renderProductChoices(failed = []) {
+  const warning = failed.length ? `<div class="notice">部分機台查詢失敗 ${failed.length} 台，但已先顯示可查到的商品。</div>` : '';
+  setHTML('productList', warning + (state.products.map(p => `
+    <div class="product-card product-card-with-img" onclick="showMachinesForProduct('${escapeHtml(p.commodityCode)}')">
+      ${productImage(p.photoUrl)}
+      <div class="product-main">
+        <div class="row"><strong>${escapeHtml(p.commodityName)}</strong><span class="price">${money(p.price)}</span></div>
+        <div class="muted">總可預訂：${p.total}　有貨設備：${p.machines.length} 台</div>
+        <button class="btn primary" style="margin-top:10px">查看有貨設備</button>
+      </div>
     </div>
-  `).join('') || '<div class="notice">目前沒有商品資料</div>');
+  `).join('') || '<div class="notice">目前沒有商品資料</div>'));
 }
 
 async function showMachinesForProduct(commodityCode) {
-  const data = await api(`/api/products/availability?commodityCode=${encodeURIComponent(commodityCode)}`);
+  setHTML('productList', '<div class="loader">查詢有貨設備中...</div>');
+  let data;
+  try {
+    data = await api(`/api/products/availability?commodityCode=${encodeURIComponent(commodityCode)}`, { timeout: 30000 });
+  } catch (error) {
+    setHTML('productList', `<div class="notice error">查詢有貨設備失敗：${escapeHtml(error.message)}</div>`);
+    return;
+  }
   const product = data.items[0];
-  if (!product) return;
-  state.products = [{ commodityCode: product.commodityCode, commodityName: product.commodityName, price: product.price, quantity: 1 }];
+  if (!product) { setHTML('productList', '<div class="notice">目前沒有設備有這項商品。</div>'); return; }
+  state.products = [{ commodityCode: product.commodityCode, commodityName: product.commodityName, price: product.price, quantity: 1, photoUrl: product.photoUrl }];
   const machineCards = (data.items || []).map(x => `
     <div class="machine-card" onclick='selectProductMachine(${JSON.stringify(x).replace(/'/g,"&#39;")})'>
       <div class="row"><strong>${escapeHtml(x.machine.name)}</strong><span class="pill">庫存 ${x.quantity}</span></div>
