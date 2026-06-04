@@ -178,7 +178,24 @@ app.get('/api/machines', safeAsync(async (req, res) => {
   const machines = await tenlife.listMachines();
   res.json({ ok: true, machines });
 }));
+app.get("/api/machines/:code/orderable-inventory", async (req, res) => {
+  try {
+    const code = req.params.code;
+    const data = await tenlife.listOrderableInventory(code);
 
+    res.json({
+      ok: true,
+      code,
+      inventory: data
+    });
+  } catch (error) {
+    console.error("orderable inventory error:", error);
+    res.status(500).json({
+      ok: false,
+      message: error.message
+    });
+  }
+});
 app.get('/api/machines/:code/state', safeAsync(async (req, res) => {
   const data = await tenlife.machineState(req.params.code);
   res.json({ ok: data.state === 0, ...data });
