@@ -309,7 +309,9 @@ module.exports = {
   createOrder,
   unlockOrder,
   cancelOrder,
-  getActiveOrders,
-  getOrderList,
-  selfTestSignature
+  listMachines: getMachines,
+  listMachineState: getMachineState,
+  listCommodities: getCommodities,
+  listMachineInventory: getMachineInventory,
+  listOrderableInventory: getOrderableInventory,
 };
