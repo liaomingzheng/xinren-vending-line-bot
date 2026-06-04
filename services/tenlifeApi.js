@@ -283,15 +283,15 @@ function selfTestSignature() {
     pass: sampleSign === "77b21395d6989067806d08c2b070853ad96508e7adcb79549746b90bc9690c48"
   };
 }
-function hasCredentials() {
-  return Boolean(
-    process.env.TENLIFE_API_BASE &&
-    process.env.TENLIFE_COMPANY &&
-    process.env.TENLIFE_TOKEN
-  );
-}
+//function hasCredentials() {
+ // return Boolean(
+  //  process.env.TENLIFE_API_BASE &&
+  //  process.env.TENLIFE_COMPANY &&
+   // process.env.TENLIFE_TOKEN
+//  );
+//}
 module.exports = {
-  hasCredentials,
+ // hasCredentials,
   buildSignBaseString,
   buildSign,
   appendSign,
