@@ -98,9 +98,7 @@ function adminOrdersSummary(limit = 8) {
 商品：${items}
 金額：$${Number(order.amount || 0)}
 期限：${order.shelflife || '-'}`;
-  })].join('
-
-');
+  })].join('\n\n');
 }
 
 function appBase(req) {
