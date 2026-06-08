@@ -9,8 +9,16 @@ const tenlife = require('./services/tenlifeApi');
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true }));
+// LINE webhook 必須先保留 raw body 給 @line/bot-sdk 驗證簽章；
+// 其他 API 才使用 JSON / urlencoded parser。
+app.use((req, res, next) => {
+  if (req.path === '/webhook') return next();
+  return express.json({ limit: '2mb' })(req, res, next);
+});
+app.use((req, res, next) => {
+  if (req.path === '/webhook') return next();
+  return express.urlencoded({ extended: true })(req, res, next);
+});
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders(res) {
     res.setHeader('Cache-Control', 'no-store');
