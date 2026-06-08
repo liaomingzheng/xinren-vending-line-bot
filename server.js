@@ -392,6 +392,97 @@ app.get('/api/tenlife/sales', safeAsync(async (req, res) => {
   res.json({ ok: data.state === 0, ...data });
 }));
 
+
+function debugRequestsHtml(rows) {
+  const escape = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const cards = rows.map((row, index) => {
+    const requestBody = typeof row.body === 'string' ? row.body : JSON.stringify(row.body || '', null, 2);
+    const responseText = typeof row.responseText === 'string' ? row.responseText : JSON.stringify(row.responseText || '', null, 2);
+    return `
+      <section class="card ${row.status === 'error' ? 'error' : ''}">
+        <div class="meta">#${index + 1}　${escape(row.time)}　${escape(row.method)}　${escape(row.path)}　<span>${escape(row.status)}</span></div>
+        <h2>${escape(row.path)} ${row.mode ? `｜${escape(row.mode)}` : ''}</h2>
+        <label>URL</label>
+        <pre>${escape(row.url)}</pre>
+        <label>Query</label>
+        <pre>${escape(JSON.stringify(row.query || {}, null, 2))}</pre>
+        <label>Headers</label>
+        <pre>${escape(JSON.stringify(row.headers || {}, null, 2))}</pre>
+        <label>Body</label>
+        <pre>${escape(requestBody || '(empty)')}</pre>
+        <label>Response / Error</label>
+        <pre>${escape(responseText || row.error || '(empty)')}</pre>
+      </section>`;
+  }).join('');
+
+  return `<!doctype html>
+  <html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tenlife API Debug</title>
+    <style>
+      body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f5f7fb;color:#111827;margin:0;padding:24px;}
+      .wrap{max-width:980px;margin:0 auto;}
+      h1{font-size:24px;margin:0 0 8px;}
+      .hint{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:12px;padding:12px 14px;margin:14px 0 18px;line-height:1.6;}
+      .actions{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0;}
+      a,button{appearance:none;border:0;background:#2563eb;color:#fff;border-radius:10px;padding:10px 14px;text-decoration:none;font-weight:700;cursor:pointer;}
+      .secondary{background:#475569;}
+      .card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:16px;margin:16px 0;box-shadow:0 8px 24px rgba(15,23,42,.06);}
+      .card.error{border-color:#fecaca;background:#fff1f2;}
+      .meta{font-size:13px;color:#6b7280;margin-bottom:8px;}
+      h2{font-size:18px;margin:0 0 12px;}
+      label{display:block;font-weight:800;margin:12px 0 6px;color:#374151;}
+      pre{white-space:pre-wrap;word-break:break-all;background:#0f172a;color:#e5e7eb;border-radius:12px;padding:12px;overflow:auto;font-size:13px;line-height:1.5;}
+      .empty{padding:30px;border:2px dashed #cbd5e1;border-radius:16px;text-align:center;color:#64748b;background:#fff;}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Tenlife API Debug</h1>
+      <div class="hint">
+        這裡顯示最近 30 筆呼叫天來 API 的內容，方便給設備商確認。<br />
+        Token 不會顯示；URL 內可能包含 sign，可給設備商比對，但不要公開張貼。<br />
+        請先在前台操作一次「建立預訂」，再回來重新整理本頁。
+      </div>
+      <div class="actions">
+        <a href="/debug/tenlife-requests?json=1">看 JSON</a>
+        <a class="secondary" href="/debug/last-lock-request">只看最近預訂封包</a>
+        <a class="secondary" href="/debug/clear-tenlife-requests">清除紀錄</a>
+      </div>
+      ${cards || '<div class="empty">目前還沒有 API 紀錄。請先操作一次建立預訂或查庫存。</div>'}
+    </div>
+  </body>
+  </html>`;
+}
+
+app.get('/debug/tenlife-requests', (req, res) => {
+  const rows = tenlife.getDebugRequests ? tenlife.getDebugRequests() : [];
+  if (req.query.json === '1') return res.json({ ok: true, count: rows.length, requests: rows });
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(debugRequestsHtml(rows));
+});
+
+app.get('/debug/last-lock-request', (req, res) => {
+  const rows = tenlife.getDebugRequests ? tenlife.getDebugRequests() : [];
+  const lockRows = rows.filter((row) => /OrderLockCommodity|OrderCreate/i.test(row.path || row.url || ''));
+  if (req.query.json === '1') return res.json({ ok: true, count: lockRows.length, requests: lockRows.slice(0, 5) });
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(debugRequestsHtml(lockRows.slice(0, 5)));
+});
+
+app.get('/debug/clear-tenlife-requests', (req, res) => {
+  if (tenlife.clearDebugRequests) tenlife.clearDebugRequests();
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send('<meta charset="utf-8"><p>已清除 Tenlife API debug 紀錄。</p><p><a href="/debug/tenlife-requests">回 debug 頁</a></p>');
+});
+
 app.listen(port, () => {
   console.log(`新刃智能販賣機商城 V6 running on port ${port}`);
   console.log(`Tenlife credentials configured: ${tenlife.hasCredentials()}`);

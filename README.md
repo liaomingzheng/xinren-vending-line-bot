@@ -1,3 +1,13 @@
+# V6.6 OrderCreate id 參數確認版
+
+本版已確認 `OrderCreate.aspx` 使用 `id` 參數，不使用 `orderNo`。
+
+```js
+async function createOrder(id) {
+  return requestPost('/OrderCreate.aspx', { id });
+}
+```
+
 # 新刃智能販賣機商城 LINE Bot V6.4
 
 V6.4 修正 OrderLockCommodity.aspx 預定鎖定 POST body：依天來 POST 範例 B，Query String 帶 code/company/shelflife/sign，body 只送 raw JSON，不再送 commodity=... form 欄位，避免 SerializationException 遇到意外字符 c。
@@ -127,3 +137,13 @@ ADMIN_LINE_USER_ID=你的LINE使用者ID
 ```
 
 `ADMIN_LINE_USER_ID` 不是 LINE 官方帳號的 Channel ID，也不是你的 LINE 帳號名稱；需要是可被 LINE Messaging API push 的 userId。若沒有填，系統仍可正常下單，只是不會通知管理者。
+
+## V6.5 Tenlife API Debug
+
+新增除錯頁面：
+
+- `/debug/tenlife-requests`：顯示最近 30 筆呼叫天來 API 的 URL、Header、Body、Response。
+- `/debug/last-lock-request`：只顯示最近的 `OrderLockCommodity.aspx` 與 `OrderCreate.aspx` 封包。
+- `/debug/clear-tenlife-requests`：清除除錯紀錄。
+
+Token 不會顯示。URL 裡的 sign 可供設備商比對，但不要公開張貼。

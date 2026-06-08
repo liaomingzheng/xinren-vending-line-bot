@@ -11,6 +11,49 @@ const DEMO_PRODUCTS = [
   { commodityID: 3000002, commodityCode: 'TEA001', commodityName: '原萃綠茶 580ml', commodityTypeName: '飲料', brandName: '原萃', price: 25, photo: '', stop: 0 }
 ];
 
+
+const MAX_DEBUG_REQUESTS = 30;
+const debugRequests = [];
+
+function redactUrlForDebug(url) {
+  try {
+    const parsed = new URL(url);
+    // sign 可以給設備商比對；Token 不會出現在 URL。
+    return parsed.toString();
+  } catch (_) {
+    return String(url || '');
+  }
+}
+
+function safePreview(value, limit = 3000) {
+  if (value === undefined || value === null) return value;
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  return text.length > limit ? `${text.slice(0, limit)}...（已截斷）` : text;
+}
+
+function recordDebugRequest(entry) {
+  const row = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    time: new Date().toISOString(),
+    ...entry,
+    url: redactUrlForDebug(entry.url),
+    body: safePreview(entry.body),
+    responseText: safePreview(entry.responseText),
+    error: entry.error ? safePreview(entry.error) : undefined
+  };
+  debugRequests.unshift(row);
+  if (debugRequests.length > MAX_DEBUG_REQUESTS) debugRequests.length = MAX_DEBUG_REQUESTS;
+  return row;
+}
+
+function getDebugRequests() {
+  return debugRequests;
+}
+
+function clearDebugRequests() {
+  debugRequests.length = 0;
+}
+
 const LOCAL_MACHINES = [
   {
     code: 'F6380162C464EF',
@@ -125,13 +168,16 @@ async function requestGet(path, params = {}, options = {}) {
   for (let i = 1; i <= attempts; i += 1) {
     try {
       const { text } = await fetchTextWithTimeout(url, { method: 'GET' }, timeoutMs);
-      return parseTenlifeJson(text);
+      const data = parseTenlifeJson(text);
+      recordDebugRequest({ method: 'GET', path, url, query: params, status: 'success', responseState: data.state, responseMessage: data.message, responseText: text });
+      return data;
     } catch (error) {
       lastError = error;
       if (i < attempts && isNetworkReset(error)) await sleep(400 * i);
       else break;
     }
   }
+  recordDebugRequest({ method: 'GET', path, url, query: params, status: 'error', error: lastError?.message || String(lastError) });
   throw lastError;
 }
 
@@ -187,6 +233,19 @@ async function requestPost(path, query = {}, body = undefined, options = {}) {
 
         // 天來回 state=0 才算成功。非 0 時直接回傳給 server.js 顯示原因，不再改成錯誤格式亂重送。
         data.__postMode = mode.label;
+        recordDebugRequest({
+          method: 'POST',
+          path,
+          url,
+          query,
+          mode: mode.label,
+          headers: mode.headers,
+          body: mode.body,
+          status: 'success',
+          responseState: data.state,
+          responseMessage: data.message,
+          responseText: text
+        });
         return data;
       } catch (error) {
         lastError = error;
@@ -205,6 +264,17 @@ async function requestPost(path, query = {}, body = undefined, options = {}) {
     await sleep(200);
   }
 
+  recordDebugRequest({
+    method: 'POST',
+    path,
+    url,
+    query,
+    mode: modes.map((m) => m.label).join(' / '),
+    body: modes[0]?.body,
+    status: 'error',
+    responseText: lastText,
+    error: lastError?.message || String(lastError)
+  });
   if (isNetworkReset(lastError)) {
     throw new Error('天來 API 連線中斷（ECONNRESET），系統已重試仍失敗，請稍後再試。');
   }
@@ -342,6 +412,8 @@ module.exports = {
   buildUrl,
   requestGet,
   requestPost,
+  getDebugRequests,
+  clearDebugRequests,
   listMachines,
   machineState,
   commodities,
