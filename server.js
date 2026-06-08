@@ -27,6 +27,17 @@ const lineClient = new line.messagingApi.MessagingApiClient({
 });
 
 const pendingOrders = new Map();
+const orderHistory = [];
+
+function upsertOrderHistory(order) {
+  if (!order || !order.id) return;
+  const index = orderHistory.findIndex((x) => x.id === order.id);
+  const snapshot = JSON.parse(JSON.stringify(order));
+  if (index >= 0) orderHistory[index] = snapshot;
+  else orderHistory.unshift(snapshot);
+  if (orderHistory.length > 300) orderHistory.length = 300;
+}
+
 
 function adminRecipients() {
   return (process.env.ADMIN_LINE_USER_ID || process.env.ADMIN_LINE_TO || '')
@@ -56,10 +67,40 @@ function orderSummaryText(order, statusText) {
 }
 
 async function notifyAdminOrder(order, statusText) {
+  upsertOrderHistory(order);
   const recipients = adminRecipients();
   if (!recipients.length || !process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_CHANNEL_ACCESS_TOKEN === 'dummy') return;
   const text = orderSummaryText(order, statusText);
   await Promise.allSettled(recipients.map((to) => lineClient.pushMessage({ to, messages: [textMessage(text)] })));
+}
+
+function isAdminUser(userId) {
+  return Boolean(userId && adminRecipients().includes(userId));
+}
+
+function orderStatusLabel(status) {
+  return {
+    WAITING_PAYMENT: '等待付款',
+    ACTIVE: '已付款 / 可領取',
+    CANCELLED: '已取消'
+  }[status] || status || '未知';
+}
+
+function adminOrdersSummary(limit = 8) {
+  const rows = Array.from(new Map([...orderHistory, ...Array.from(pendingOrders.values())].map((o) => [o.id, o])).values())
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, limit);
+  if (!rows.length) return '目前沒有本機訂單紀錄。';
+  return ['最近訂單：', ...rows.map((order, idx) => {
+    const items = (order.items || []).map((item) => `${item.commodityName || item.commodityCode}×${item.quantity || 1}`).join('、') || '無商品';
+    return `${idx + 1}. ${orderStatusLabel(order.status)}｜${order.machine?.name || order.machine?.code || ''}
+訂單：${order.id}
+商品：${items}
+金額：$${Number(order.amount || 0)}
+期限：${order.shelflife || '-'}`;
+  })].join('
+
+');
 }
 
 function appBase(req) {
@@ -73,6 +114,20 @@ function addMinutes(date, minutes) {
 function formatDateTime(date) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+
+function formatTaipeiTodayEndTime() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date()).reduce((acc, part) => {
+    if (part.type !== 'literal') acc[part.type] = part.value;
+    return acc;
+  }, {});
+  return `${parts.year}-${parts.month}-${parts.day} 23:59:59`;
 }
 
 function formatDate(date) {
@@ -137,6 +192,25 @@ async function handleLineEvent(event, req) {
   if (event.type !== 'message' || event.message.type !== 'text') return null;
   const text = event.message.text.trim();
   const baseUrl = appBase(req);
+  const sourceUserId = event.source && event.source.userId;
+
+  if (/^(我的ID|我的id|管理員ID|管理員id|取得ID|取得id)$/.test(text)) {
+    return lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [textMessage(`你的 LINE userId：\n${sourceUserId || '此聊天室沒有 userId'}\n\n請把這串填到 Render Environment 的 ADMIN_LINE_USER_ID，儲存後重新部署。`)]
+    });
+  }
+
+  if (/^(今日訂單|最近訂單|管理員訂單)$/.test(text)) {
+    if (!isAdminUser(sourceUserId)) {
+      return lineClient.replyMessage({ replyToken: event.replyToken, messages: [textMessage('你尚未設定為管理員。請先傳「我的ID」，再把 userId 填到 Render 的 ADMIN_LINE_USER_ID。')] });
+    }
+    return lineClient.replyMessage({ replyToken: event.replyToken, messages: [textMessage(adminOrdersSummary(8))] });
+  }
+
+  if (/^(訂單後台|管理後台)$/.test(text)) {
+    return lineClient.replyMessage({ replyToken: event.replyToken, messages: [textMessage(`訂單後台：\n${baseUrl}/admin-orders.html`)] });
+  }
 
   if (/訂購|照設備|照商品|商城|購買|買|下單/.test(text)) {
     return lineClient.replyMessage({ replyToken: event.replyToken, messages: [flexEntry(baseUrl)] });
@@ -287,7 +361,7 @@ app.post('/api/orders/lock', safeAsync(async (req, res) => {
   if (!machineCode) return res.status(400).json({ ok: false, message: '缺少 machineCode' });
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok: false, message: '缺少商品 items' });
 
-  const shelflife = formatDateTime(addMinutes(new Date(), 15));
+  const shelflife = formatTaipeiTodayEndTime();
   const commodity = items.map((item) => {
     const priceValue = Number(item.price || item.amount || 0);
     return {
@@ -375,7 +449,15 @@ app.get('/api/orders/:id', safeAsync(async (req, res) => {
 }));
 
 app.get('/api/orders', safeAsync(async (req, res) => {
-  res.json({ ok: true, orders: Array.from(pendingOrders.values()).sort((a,b) => b.createdAt.localeCompare(a.createdAt)) });
+  const rows = Array.from(new Map([...orderHistory, ...Array.from(pendingOrders.values())].map((o) => [o.id, o])).values())
+    .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json({ ok: true, orders: rows });
+}));
+
+app.get('/api/admin/orders', safeAsync(async (req, res) => {
+  const rows = Array.from(new Map([...orderHistory, ...Array.from(pendingOrders.values())].map((o) => [o.id, o])).values())
+    .sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  res.json({ ok: true, orders: rows, adminNotifyConfigured: adminRecipients().length > 0 });
 }));
 
 app.get('/api/tenlife/active-orders', safeAsync(async (req, res) => {

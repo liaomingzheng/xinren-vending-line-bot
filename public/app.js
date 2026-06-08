@@ -37,6 +37,25 @@ function setReturnTo(path) { localStorage.setItem('xinren_return_to', path); }
 
 const state = { machines: [], selectedMachine: null, products: [], cart: new Map(), map: null, markers: [] };
 
+function cartCount() {
+  return getCartItems().reduce((sum, item) => sum + Number(item.quantity || 1), 0);
+}
+
+function showToast(message) {
+  let toast = document.getElementById('toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.className = 'toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(window.__xinrenToastTimer);
+  window.__xinrenToastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+}
+
+
 function getCartItems() {
   return Array.from(state.cart.values());
 }
@@ -49,19 +68,35 @@ function renderCart(nextHref) {
   const items = getCartItems();
   const box = el('cart');
   if (!box) return;
-  if (!items.length) { box.classList.add('hidden'); return; }
+  if (!items.length) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const count = cartCount();
+  const first = items[0];
+  const more = items.length > 1 ? ` 等 ${items.length} 種商品` : '';
   box.classList.remove('hidden');
   box.innerHTML = `
-    <div class="cart-row"><strong>已選 ${items.reduce((a,b)=>a+Number(b.quantity||1),0)} 件</strong><strong class="price">${money(cartTotal())}</strong></div>
-    <button class="btn primary block" onclick="goConfirm('${nextHref || 'confirm.html'}')">前往結帳</button>
+    <div class="cart-row">
+      <div>
+        <strong>已選 ${count} 件｜${escapeHtml(first.commodityName || '商品')}${more}</strong>
+        <div class="muted">點「查看明細」可確認商品與數量</div>
+      </div>
+      <strong class="price">${money(cartTotal())}</strong>
+    </div>
+    <div class="cart-actions">
+      <button class="btn block" onclick="openCartSheet()">查看明細</button>
+      <button class="btn primary block" onclick="goConfirm('${nextHref || 'confirm.html'}')">前往結帳</button>
+    </div>
   `;
 }
 
 function addToCart(item) {
   const key = item.commodityCode;
   const old = state.cart.get(key);
-  state.cart.set(key, { ...item, quantity: old ? old.quantity + 1 : 1 });
-  renderCart('confirm.html');
+  const nextQty = old ? old.quantity + 1 : 1;
+  state.cart.set(key, { ...item, quantity: nextQty });
+  showToast(`已加入：${item.commodityName || '商品'} × ${nextQty}`);
+  if (el('products')) renderProductList();
+  else renderCart('confirm.html');
+  if (document.getElementById('cartSheet')) renderCartSheetBody();
 }
 
 function removeFromCart(code) {
@@ -69,7 +104,78 @@ function removeFromCart(code) {
   if (!old) return;
   if (old.quantity <= 1) state.cart.delete(code);
   else state.cart.set(code, { ...old, quantity: old.quantity - 1 });
-  renderProductList();
+  if (el('products')) renderProductList();
+  else renderCart('confirm.html');
+  if (document.getElementById('cartSheet')) renderCartSheetBody();
+}
+
+function setCartQuantity(code, quantity) {
+  const old = state.cart.get(code);
+  if (!old) return;
+  const qty = Number(quantity || 0);
+  if (qty <= 0) state.cart.delete(code);
+  else state.cart.set(code, { ...old, quantity: qty });
+  if (el('products')) renderProductList();
+  else renderCart('confirm.html');
+  if (document.getElementById('cartSheet')) renderCartSheetBody();
+}
+
+function closeCartSheet() {
+  const sheet = document.getElementById('cartSheet');
+  if (sheet) sheet.remove();
+}
+
+function openCartSheet() {
+  closeCartSheet();
+  const wrap = document.createElement('div');
+  wrap.id = 'cartSheet';
+  wrap.className = 'cart-sheet-backdrop';
+  wrap.innerHTML = `
+    <div class="cart-sheet">
+      <div class="cart-sheet-head">
+        <div><strong>已選商品</strong><div class="muted">確認品項、數量與小計</div></div>
+        <button class="sheet-close" onclick="closeCartSheet()">×</button>
+      </div>
+      <div id="cartSheetBody"></div>
+    </div>
+  `;
+  wrap.addEventListener('click', (event) => { if (event.target === wrap) closeCartSheet(); });
+  document.body.appendChild(wrap);
+  renderCartSheetBody();
+}
+
+function renderCartSheetBody() {
+  const body = document.getElementById('cartSheetBody');
+  if (!body) return;
+  const items = getCartItems();
+  if (!items.length) {
+    body.innerHTML = `<div class="notice">目前購物車沒有商品。</div><button class="btn block" onclick="closeCartSheet()">繼續選購</button>`;
+    renderCart('confirm.html');
+    return;
+  }
+  body.innerHTML = `
+    <div class="cart-sheet-items">
+      ${items.map(i => `
+        <div class="cart-sheet-item">
+          ${productImage(i.photoUrl)}
+          <div class="product-main">
+            <div class="row"><strong>${escapeHtml(i.commodityName)}</strong><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div>
+            <div class="muted">單價 ${money(i.price)}｜商品編號：${escapeHtml(i.commodityCode || '')}</div>
+            <div class="qty qty-strong" style="margin-top:8px">
+              <button onclick="setCartQuantity('${escapeHtml(i.commodityCode)}', ${Number(i.quantity||1)-1})">−</button>
+              <span>${Number(i.quantity || 1)}</span>
+              <button onclick="setCartQuantity('${escapeHtml(i.commodityCode)}', ${Number(i.quantity||1)+1})">＋</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    <div class="cart-sheet-total"><span>小計</span><strong class="price">${money(cartTotal())}</strong></div>
+    <div class="cart-actions">
+      <button class="btn block" onclick="closeCartSheet()">繼續選購</button>
+      <button class="btn primary block" onclick="goConfirm('confirm.html')">確認訂單</button>
+    </div>
+  `;
   renderCart('confirm.html');
 }
 
@@ -175,9 +281,10 @@ function renderProductList() {
           <div class="row"><div><strong>${escapeHtml(p.commodityName)}</strong><div class="muted">${escapeHtml(p.commodityTypeName || p.brandName || p.commodityCode)}</div></div><div class="price">${money(p.price)}</div></div>
           <div class="muted">可預訂庫存：${p.quantity ?? '-'}　商品編號：${escapeHtml(p.commodityCode)}</div>
           <div class="row" style="margin-top:10px">
-            <span>${inCart ? `已選 ${inCart}` : ''}</span>
-            <div class="qty">
-              <button onclick="removeFromCart('${escapeHtml(p.commodityCode)}')">−</button>
+            <span class="selected-badge ${inCart ? '' : 'empty'}">${inCart ? `已選 × ${inCart}` : '尚未選擇'}</span>
+            <div class="qty qty-strong">
+              <button onclick="removeFromCart('${escapeHtml(p.commodityCode)}')" ${inCart ? '' : 'disabled'}>−</button>
+              <span>${inCart || 0}</span>
               <button onclick='addToCart(${JSON.stringify({commodityCode:p.commodityCode, commodityName:p.commodityName, price:p.price, quantity:1, photoUrl:p.photoUrl}).replace(/'/g,"&#39;")})'>＋</button>
             </div>
           </div>
@@ -272,7 +379,7 @@ async function initConfirm() {
       <div class="row"><strong>總金額</strong><strong class="price">${money(total)}</strong></div>
     </div>
     <button class="btn block" onclick="location.href='${escapeHtml(draft.returnTo || '/order-by-machine.html')}'">回上一步修改商品</button>
-    <div class="notice" style="margin-top:10px">按下「準備訂購」後，系統會先呼叫天來即時預訂鎖定 API，保留 15 分鐘等待付款。</div>
+    <div class="notice" style="margin-top:10px">按下「準備訂購」後，系統會先鎖定商品；付款等待時間為 15 分鐘，QRC 領取期限為當日 23:59:59。</div>
     <button class="btn primary block" style="margin-top:12px" onclick="lockOrder()">準備訂購</button>
   `);
 }
@@ -312,7 +419,7 @@ async function initPayment() {
     const data = await api(`/api/orders/${encodeURIComponent(id)}`);
     const order = data.order;
     setHTML('paymentBox', `
-      <div class="card"><h3>等待付款</h3><p>請在 <strong>15 分鐘內</strong> 完成付款，逾時預訂會失效。</p></div>
+      <div class="card"><h3>等待付款</h3><p>請在 <strong>15 分鐘內</strong> 完成付款。付款完成後，QRC 領取期限為 <strong>當日 23:59:59</strong>。</p></div>
       <div class="card">
         <div class="row"><span>訂單編號</span><strong>${escapeHtml(order.id)}</strong></div>
         <div class="row"><span>付款金額</span><strong class="price">${money(order.amount)}</strong></div>

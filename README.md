@@ -151,3 +151,10 @@ ADMIN_LINE_USER_ID=你的LINE使用者ID
 - `/debug/clear-tenlife-requests`：清除除錯紀錄。
 
 Token 不會顯示。URL 裡的 sign 可供設備商比對，但不要公開張貼。
+
+
+## V6.9 QRC 當日有效期限修正版
+
+- `OrderLockCommodity.aspx` 的 `shelflife` 固定送出台灣時間當日 `23:59:59`。
+- 前台付款等待文字保留 15 分鐘提醒，但 QRC 領取期限顯示當日 23:59:59。
+- 使用 `Asia/Taipei` 產生日期，避免 Render 伺服器 UTC 時區造成日期錯誤。
