@@ -96,7 +96,7 @@ async function fetchTextWithTimeout(url, options = {}, timeoutMs = 15000) {
       signal: controller.signal,
       headers: {
         'Accept': 'application/json, text/plain, */*',
-        'User-Agent': 'xinren-vending-line-bot/6.2',
+        'User-Agent': 'xinren-vending-line-bot/6.4',
         ...(options.headers || {})
       }
     });
@@ -135,29 +135,34 @@ async function requestGet(path, params = {}, options = {}) {
   throw lastError;
 }
 
-function postBodies(body) {
+function postBodies(body, options = {}) {
   if (body === undefined) return [{ label: 'empty', headers: {}, body: undefined }];
+
+  // 天來文件第 21 頁 POST 範例 B：Query String 帶參數與 sign，HTTP body 直接放 JSON。
+  // 之前曾用 commodity=... 的 form body，天來 WCF 會把第一個字元 c 當作 JSON 解析，造成 SerializationException。
+  // 因此 V6.4 起嚴格禁止把 commodity 包成 form 欄位，只送原始 JSON 字串。
   const json = JSON.stringify(body);
-  const modes = [
+  const contentType = options.contentType || 'application/x-www-form-urlencoded; charset=utf-8';
+
+  return [
     {
-      label: 'raw-json-form-content-type',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+      label: 'raw-json-body',
+      headers: {
+        'Content-Type': contentType,
+        'Content-Length': Buffer.byteLength(json, 'utf8').toString()
+      },
       body: json
     },
+    // 少數環境會依 Content-Type 選擇 JSON parser；第一種不通時才用 application/json 再試一次。
     {
-      label: 'raw-json-json-content-type',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      label: 'raw-json-body-json-content-type',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(json, 'utf8').toString()
+      },
       body: json
     }
   ];
-  if (Array.isArray(body.commodity)) {
-    modes.push({
-      label: 'form-commodity-json',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
-      body: new URLSearchParams({ commodity: JSON.stringify(body.commodity) }).toString()
-    });
-  }
-  return modes;
 }
 
 async function requestPost(path, query = {}, body = undefined, options = {}) {
@@ -165,9 +170,11 @@ async function requestPost(path, query = {}, body = undefined, options = {}) {
   const url = buildUrl(path, query);
   const timeoutMs = options.timeoutMs || 18000;
   const attempts = options.attempts || 2;
+  const modes = postBodies(body, options);
   let lastError;
+  let lastText = '';
 
-  for (const mode of postBodies(body)) {
+  for (const mode of modes) {
     for (let i = 1; i <= attempts; i += 1) {
       try {
         const { text } = await fetchTextWithTimeout(url, {
@@ -175,27 +182,34 @@ async function requestPost(path, query = {}, body = undefined, options = {}) {
           headers: mode.headers,
           body: mode.body
         }, timeoutMs);
+        lastText = text;
         const data = parseTenlifeJson(text);
-        // 如果 API 明確回傳參數格式錯誤，嘗試下一種 body 格式。
-        if (data && data.state !== 0 && /格式|參數|commodity|資料/i.test(String(data.message || '')) && mode.label !== postBodies(body).at(-1)?.label) {
-          lastError = new Error(data.message || 'Tenlife POST 格式不接受');
-          break;
-        }
+
+        // 天來回 state=0 才算成功。非 0 時直接回傳給 server.js 顯示原因，不再改成錯誤格式亂重送。
+        data.__postMode = mode.label;
         return data;
       } catch (error) {
         lastError = error;
-        if (i < attempts && isNetworkReset(error)) await sleep(500 * i);
+        const msg = String(error?.message || '');
+
+        // 如果是「不是 JSON」或天來 .NET SerializationException，表示目前 Content-Type/body parser 不接受，換下一個 raw JSON mode。
+        const shouldTryNextMode = /不是 JSON|SerializationException|XmlException|反序列化|unexpected|意外字符/i.test(msg + ' ' + lastText);
+        if (shouldTryNextMode) break;
+
+        if (i < attempts && isNetworkReset(error)) await sleep(600 * i);
         else break;
       }
     }
-    if (!isNetworkReset(lastError)) {
-      // 非連線錯誤也嘗試下一種 POST 格式。
-      await sleep(200);
-    }
+
+    // 換下一種 Content-Type，但 body 仍維持 raw JSON，絕不送 commodity=...
+    await sleep(200);
   }
 
   if (isNetworkReset(lastError)) {
     throw new Error('天來 API 連線中斷（ECONNRESET），系統已重試仍失敗，請稍後再試。');
+  }
+  if (lastText) {
+    throw new Error(`天來 POST 回傳無法解析：${String(lastText).slice(0, 500)}`);
   }
   throw lastError;
 }
@@ -292,7 +306,7 @@ async function lockOrder({ code, shelflife, commodity }) {
   if (!code) throw new Error('缺少智販機編號 code');
   if (!shelflife) throw new Error('缺少預訂保留時間 shelflife');
   if (!Array.isArray(commodity) || commodity.length === 0) throw new Error('缺少預訂商品 commodity');
-  return requestPost('/OrderLockCommodity.aspx', { code, shelflife }, { commodity }, { attempts: 3, timeoutMs: 20000 });
+  return requestPost('/OrderLockCommodity.aspx', { code, shelflife }, { commodity }, { attempts: 3, timeoutMs: 20000, contentType: 'application/x-www-form-urlencoded; charset=utf-8' });
 }
 
 async function createOrder(id) {

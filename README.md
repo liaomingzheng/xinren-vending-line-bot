@@ -1,3 +1,7 @@
+# 新刃智能販賣機商城 LINE Bot V6.4
+
+V6.4 修正 OrderLockCommodity.aspx 預定鎖定 POST body：依天來 POST 範例 B，Query String 帶 code/company/shelflife/sign，body 只送 raw JSON，不再送 commodity=... form 欄位，避免 SerializationException 遇到意外字符 c。
+
 # 新刃智能販賣機商城 V6.2 - 預定鎖定修正版
 
 這一版包含：
