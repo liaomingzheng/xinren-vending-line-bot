@@ -28,6 +28,40 @@ const lineClient = new line.messagingApi.MessagingApiClient({
 
 const pendingOrders = new Map();
 
+function adminRecipients() {
+  return (process.env.ADMIN_LINE_USER_ID || process.env.ADMIN_LINE_TO || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function shortOrderId(id) {
+  return String(id || '').slice(0, 8);
+}
+
+function orderSummaryText(order, statusText) {
+  const itemsText = (order.items || []).map((item) => `- ${item.commodityName || item.commodityCode} × ${item.quantity || 1}｜$${Number(item.price || 0)}`).join('\n');
+  return [
+    `新刃智能販賣機訂單通知`,
+    `狀態：${statusText}`,
+    `訂單：${order.id}`,
+    `機台：${order.machine?.name || order.machine?.code || ''}`,
+    `機台編號：${order.machine?.code || ''}`,
+    `金額：$${Number(order.amount || 0)}`,
+    `商品：`,
+    itemsText || '- 無商品資料',
+    order.shelflife ? `領取期限：${order.shelflife}` : '',
+    `建立時間：${new Date(order.createdAt || Date.now()).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}`
+  ].filter(Boolean).join('\n');
+}
+
+async function notifyAdminOrder(order, statusText) {
+  const recipients = adminRecipients();
+  if (!recipients.length || !process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_CHANNEL_ACCESS_TOKEN === 'dummy') return;
+  const text = orderSummaryText(order, statusText);
+  await Promise.allSettled(recipients.map((to) => lineClient.pushMessage({ to, messages: [textMessage(text)] })));
+}
+
 function appBase(req) {
   return process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
 }
@@ -137,7 +171,7 @@ app.post('/webhook', line.middleware(lineConfig), async (req, res) => {
 });
 
 app.get('/api/config', (req, res) => {
-  res.json({ ok: true, hasTenlifeCredentials: tenlife.hasCredentials(), appBaseUrl: appBase(req), paymentMode: process.env.PAYMENT_MODE || 'mock' });
+  res.json({ ok: true, hasTenlifeCredentials: tenlife.hasCredentials(), appBaseUrl: appBase(req), paymentMode: process.env.PAYMENT_MODE || 'mock', hasAdminNotify: adminRecipients().length > 0 });
 });
 
 app.get('/api/machines', safeAsync(async (req, res) => {
@@ -249,20 +283,46 @@ app.get('/api/products/availability', safeAsync(async (req, res) => {
 }));
 
 app.post('/api/orders/lock', safeAsync(async (req, res) => {
-  const { machineCode, items } = req.body;
+  const { machineCode, items } = req.body || {};
   if (!machineCode) return res.status(400).json({ ok: false, message: '缺少 machineCode' });
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok: false, message: '缺少商品 items' });
 
   const shelflife = formatDateTime(addMinutes(new Date(), 15));
   const commodity = items.map((item) => ({
-    commodityCode: item.commodityCode,
+    commodityCode: String(item.commodityCode || '').trim(),
     quantity: Number(item.quantity || 1),
     price: ''
-  }));
-  const result = await tenlife.lockOrder({ code: machineCode, shelflife, commodity });
-  if (result.state !== 0) return res.status(400).json({ ok: false, message: result.message || '預訂鎖定失敗', raw: result });
+  })).filter((item) => item.commodityCode && item.quantity > 0);
 
-  const machines = await tenlife.listMachines();
+  if (!commodity.length) return res.status(400).json({ ok: false, message: '商品資料缺少 commodityCode' });
+
+  let result;
+  try {
+    if (process.env.MOCK_LOCK_ONLY === 'true') {
+      result = { state: 0, message: '', id: `MOCK-${Date.now()}` };
+    } else {
+      result = await tenlife.lockOrder({ code: machineCode, shelflife, commodity });
+    }
+  } catch (error) {
+    console.error('OrderLockCommodity error:', {
+      message: error.message,
+      machineCode,
+      shelflife,
+      commodity
+    });
+    return res.status(502).json({
+      ok: false,
+      message: `建立預訂鎖定失敗：${error.message}`,
+      hint: '若 Render Logs 顯示 ECONNRESET，通常是天來 API 連線中斷；V6.2 已自動重試，仍失敗時請稍後再試或請設備商確認 OrderLockCommodity.aspx 連線。'
+    });
+  }
+
+  if (result.state !== 0) {
+    console.error('OrderLockCommodity rejected:', { result, machineCode, shelflife, commodity });
+    return res.status(400).json({ ok: false, message: result.message || '預訂鎖定失敗', raw: result });
+  }
+
+  const machines = await tenlife.listMachines().catch(() => []);
   const machine = machines.find((m) => m.code === machineCode) || { code: machineCode, name: machineCode };
   const localOrder = {
     id: result.id,
@@ -275,18 +335,22 @@ app.post('/api/orders/lock', safeAsync(async (req, res) => {
     qrDataUrl: null
   };
   pendingOrders.set(result.id, localOrder);
+  notifyAdminOrder(localOrder, '已建立預訂，等待付款').catch((error) => console.error('admin notify lock error:', error));
   res.json({ ok: true, order: localOrder, raw: result });
 }));
 
 app.post('/api/orders/:id/mock-pay', safeAsync(async (req, res) => {
   const order = pendingOrders.get(req.params.id);
   if (!order) return res.status(404).json({ ok: false, message: '找不到訂單，可能服務重啟或訂單已過期' });
-  const confirm = await tenlife.createOrder(req.params.id);
+  const confirm = process.env.MOCK_LOCK_ONLY === 'true'
+    ? { state: 0, message: '' }
+    : await tenlife.createOrder(req.params.id);
   if (confirm.state !== 0) return res.status(400).json({ ok: false, message: confirm.message || '訂單生效失敗', raw: confirm });
   order.status = 'ACTIVE';
   order.paidAt = new Date().toISOString();
   order.qrDataUrl = await QRCode.toDataURL(req.params.id, { margin: 1, width: 260 });
   pendingOrders.set(order.id, order);
+  notifyAdminOrder(order, '付款完成，訂單已生效').catch((error) => console.error('admin notify paid error:', error));
   res.json({ ok: true, order, raw: confirm });
 }));
 

@@ -26,6 +26,14 @@ function el(id) { return document.getElementById(id); }
 function setHTML(id, html) { el(id).innerHTML = html; }
 function escapeHtml(s='') { return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 function qs(name) { return new URLSearchParams(location.search).get(name); }
+function currentPath() { return `${location.pathname}${location.search || ''}`; }
+function goBack(fallback = '/') {
+  const draft = JSON.parse(localStorage.getItem('xinren_order_draft') || '{}');
+  const stored = localStorage.getItem('xinren_return_to') || draft.returnTo || fallback;
+  if (document.referrer && document.referrer.includes(location.host) && history.length > 1) history.back();
+  else location.href = stored || fallback;
+}
+function setReturnTo(path) { localStorage.setItem('xinren_return_to', path); }
 
 const state = { machines: [], selectedMachine: null, products: [], cart: new Map(), map: null, markers: [] };
 
@@ -65,12 +73,15 @@ function removeFromCart(code) {
   renderCart('confirm.html');
 }
 
-function saveOrderDraft() {
-  localStorage.setItem('xinren_order_draft', JSON.stringify({ machine: state.selectedMachine, items: getCartItems() }));
+function saveOrderDraft(returnTo = currentPath()) {
+  const existing = JSON.parse(localStorage.getItem('xinren_order_draft') || '{}');
+  const draft = { ...existing, machine: state.selectedMachine, items: getCartItems(), returnTo };
+  localStorage.setItem('xinren_order_draft', JSON.stringify(draft));
+  setReturnTo(returnTo);
 }
 
 function goConfirm() {
-  saveOrderDraft();
+  saveOrderDraft(currentPath());
   location.href = '/confirm.html';
 }
 
@@ -167,7 +178,7 @@ function renderProductList() {
             <span>${inCart ? `已選 ${inCart}` : ''}</span>
             <div class="qty">
               <button onclick="removeFromCart('${escapeHtml(p.commodityCode)}')">−</button>
-              <button onclick='addToCart(${JSON.stringify({commodityCode:p.commodityCode, commodityName:p.commodityName, price:p.price, quantity:1}).replace(/'/g,"&#39;")})'>＋</button>
+              <button onclick='addToCart(${JSON.stringify({commodityCode:p.commodityCode, commodityName:p.commodityName, price:p.price, quantity:1, photoUrl:p.photoUrl}).replace(/'/g,"&#39;")})'>＋</button>
             </div>
           </div>
         </div>
@@ -230,14 +241,14 @@ async function showMachinesForProduct(commodityCode) {
       <button class="btn primary" style="margin-top:10px">選這台購買</button>
     </div>
   `).join('');
-  setHTML('productList', `<div class="card"><h3>${escapeHtml(product.commodityName)}</h3><div class="muted">請選擇要前往的販賣機</div></div>${machineCards}`);
+  setHTML('productList', `<div class="card product-card-with-img">${productImage(product.photoUrl)}<div class="product-main"><h3>${escapeHtml(product.commodityName)}</h3><div class="muted">請選擇要前往的販賣機</div><div class="price">${money(product.price)}</div></div></div>${machineCards}`);
 }
 
 function selectProductMachine(x) {
   state.selectedMachine = x.machine;
   state.cart.clear();
-  addToCart({ commodityCode: x.commodityCode, commodityName: x.commodityName, price: x.price, quantity: 1 });
-  saveOrderDraft();
+  addToCart({ commodityCode: x.commodityCode, commodityName: x.commodityName, price: x.price, quantity: 1, photoUrl: x.photoUrl });
+  saveOrderDraft('/order-by-product.html');
   location.href = '/confirm.html';
 }
 
@@ -256,43 +267,74 @@ async function initConfirm() {
     </div>
     <div class="card">
       <h3>商品明細</h3>
-      ${draft.items.map(i => `<div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div>`).join('')}
+      ${draft.items.map(i => `<div class="order-item">${productImage(i.photoUrl)}<div class="product-main"><div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div><div class="muted">商品編號：${escapeHtml(i.commodityCode || '')}</div></div></div>`).join('')}
       <hr style="border:0;border-top:1px solid #e5e7eb;margin:12px 0">
       <div class="row"><strong>總金額</strong><strong class="price">${money(total)}</strong></div>
     </div>
-    <div class="notice">按下「準備訂購」後，系統會先呼叫天來即時預訂鎖定 API，保留 15 分鐘等待付款。</div>
+    <button class="btn block" onclick="location.href='${escapeHtml(draft.returnTo || '/order-by-machine.html')}'">回上一步修改商品</button>
+    <div class="notice" style="margin-top:10px">按下「準備訂購」後，系統會先呼叫天來即時預訂鎖定 API，保留 15 分鐘等待付款。</div>
     <button class="btn primary block" style="margin-top:12px" onclick="lockOrder()">準備訂購</button>
   `);
 }
 
 async function lockOrder() {
   const draft = JSON.parse(localStorage.getItem('xinren_order_draft') || '{}');
-  setHTML('confirmBox', '<div class="loader">建立預訂鎖定中...</div>');
-  const data = await api('/api/orders/lock', { method: 'POST', body: { machineCode: draft.machine.code, items: draft.items } });
-  localStorage.setItem('xinren_last_order_id', data.order.id);
-  location.href = `/payment.html?id=${encodeURIComponent(data.order.id)}`;
+  if (!draft.machine?.code || !draft.items?.length) {
+    setHTML('confirmBox', '<div class="notice error">訂單資料不完整，請重新選擇商品。</div><a class="btn primary block" href="/order-by-machine.html">回到訂購</a>');
+    return;
+  }
+  setHTML('confirmBox', '<div class="loader">建立預訂鎖定中...</div><div class="notice">正在向天來 API 鎖定商品，若連線不穩系統會自動重試，請稍候。</div>');
+  try {
+    const data = await api('/api/orders/lock', {
+      method: 'POST',
+      timeout: 45000,
+      body: { machineCode: draft.machine.code, items: draft.items }
+    });
+    localStorage.setItem('xinren_last_order_id', data.order.id);
+    location.href = `/payment.html?id=${encodeURIComponent(data.order.id)}`;
+  } catch (error) {
+    setHTML('confirmBox', `
+      <div class="notice error">建立預訂失敗：${escapeHtml(error.message)}</div>
+      <div class="card">
+        <h3>${escapeHtml(draft.machine.name || draft.machine.code)}</h3>
+        <div class="muted">機台編號：${escapeHtml(draft.machine.code)}</div>
+        ${draft.items.map(i => `<div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div>`).join('')}
+      </div>
+      <button class="btn primary block" onclick="lockOrder()">重新建立預訂</button>
+      <a class="btn block" style="margin-top:10px" href="/order-by-machine.html">回到機台重新選擇</a>
+    `);
+  }
 }
 
 async function initPayment() {
   const id = qs('id') || localStorage.getItem('xinren_last_order_id');
-  const data = await api(`/api/orders/${encodeURIComponent(id)}`);
-  const order = data.order;
-  setHTML('paymentBox', `
-    <div class="card"><h3>等待付款</h3><p>請在 <strong>15 分鐘內</strong> 完成付款，逾時預訂會失效。</p></div>
-    <div class="card">
-      <div class="row"><span>訂單編號</span><strong>${escapeHtml(order.id)}</strong></div>
-      <div class="row"><span>付款金額</span><strong class="price">${money(order.amount)}</strong></div>
-      <div class="row"><span>付款方式</span><strong>模擬付款</strong></div>
-    </div>
-    <button class="btn green block" onclick="mockPay('${escapeHtml(order.id)}')">模擬付款完成</button>
-    <button class="btn danger block" style="margin-top:10px" onclick="cancelOrder('${escapeHtml(order.id)}')">取消預訂</button>
-  `);
+  try {
+    const data = await api(`/api/orders/${encodeURIComponent(id)}`);
+    const order = data.order;
+    setHTML('paymentBox', `
+      <div class="card"><h3>等待付款</h3><p>請在 <strong>15 分鐘內</strong> 完成付款，逾時預訂會失效。</p></div>
+      <div class="card">
+        <div class="row"><span>訂單編號</span><strong>${escapeHtml(order.id)}</strong></div>
+        <div class="row"><span>付款金額</span><strong class="price">${money(order.amount)}</strong></div>
+        <div class="row"><span>付款方式</span><strong>模擬付款</strong></div>
+      </div>
+      <button class="btn green block" onclick="mockPay('${escapeHtml(order.id)}')">模擬付款完成</button>
+      <a class="btn block" style="margin-top:10px" href="/confirm.html">回確認訂單</a>
+      <button class="btn danger block" style="margin-top:10px" onclick="cancelOrder('${escapeHtml(order.id)}')">取消預訂</button>
+    `);
+  } catch (error) {
+    setHTML('paymentBox', `<div class="notice error">付款頁載入失敗：${escapeHtml(error.message)}</div><a class="btn primary block" href="/order-by-machine.html">重新訂購</a>`);
+  }
 }
 
 async function mockPay(id) {
   setHTML('paymentBox', '<div class="loader">確認付款並啟用條碼中...</div>');
-  const data = await api(`/api/orders/${encodeURIComponent(id)}/mock-pay`, { method: 'POST', body: {} });
-  location.href = `/qrcode.html?id=${encodeURIComponent(data.order.id)}`;
+  try {
+    const data = await api(`/api/orders/${encodeURIComponent(id)}/mock-pay`, { method: 'POST', timeout: 45000, body: {} });
+    location.href = `/qrcode.html?id=${encodeURIComponent(data.order.id)}`;
+  } catch (error) {
+    setHTML('paymentBox', `<div class="notice error">付款確認失敗：${escapeHtml(error.message)}</div><button class="btn green block" onclick="mockPay('${escapeHtml(id)}')">重新確認付款</button>`);
+  }
 }
 
 async function cancelOrder(id) {
@@ -310,7 +352,7 @@ async function initQr() {
     <div class="card">
       <h3>${escapeHtml(o.machine.name)}</h3>
       <div class="muted">${escapeHtml(o.machine.address || '')}</div>
-      ${o.items.map(i => `<div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div>`).join('')}
+      ${o.items.map(i => `<div class="order-item">${productImage(i.photoUrl)}<div class="product-main"><div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div><div class="muted">商品編號：${escapeHtml(i.commodityCode || '')}</div></div></div>`).join('')}
       <img class="qr" src="${o.qrDataUrl}" alt="QRC 領取碼">
       <div class="muted">領取碼：${escapeHtml(o.id)}</div>
       <div class="muted">領取期限：${escapeHtml(o.shelflife)}</div>
@@ -327,6 +369,7 @@ async function initOrders() {
       <div class="row"><strong>${escapeHtml(o.machine?.name || '')}</strong><span class="pill">${escapeHtml(o.status)}</span></div>
       <div class="muted">訂單：${escapeHtml(o.id)}</div>
       <div class="muted">建立：${new Date(o.createdAt).toLocaleString('zh-TW')}</div>
+      ${(o.items || []).map(i => `<div class="order-item compact">${productImage(i.photoUrl)}<div class="product-main"><div>${escapeHtml(i.commodityName)} × ${i.quantity}</div><div class="muted">${money(Number(i.price||0)*Number(i.quantity||1))}</div></div></div>`).join('')}
       ${o.status === 'ACTIVE' ? `<a class="btn primary" style="margin-top:10px" href="/qrcode.html?id=${encodeURIComponent(o.id)}">查看 QRC</a>` : ''}
     </div>
   `).join('');

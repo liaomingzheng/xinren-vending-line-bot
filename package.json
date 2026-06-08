@@ -1,7 +1,7 @@
 {
   "name": "xinren-vending-line-bot-v6-tenlife",
-  "version": "6.0.0",
-  "description": "新刃智能販賣機商城 V6 - LINE + LIFF + Tenlife API 串接版",
+  "version": "6.2.0",
+  "description": "新刃智能販賣機商城 V6.2 - LINE + LIFF + Tenlife API 預定鎖定修正版",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

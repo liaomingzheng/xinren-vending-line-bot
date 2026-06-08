@@ -1,4 +1,4 @@
-# 新刃智能販賣機商城 V6 - LINE + LIFF + 天來 API 串接版
+# 新刃智能販賣機商城 V6.2 - 預定鎖定修正版
 
 這一版包含：
 
@@ -9,6 +9,8 @@
 - Tenlife API 簽章與代理串接
 - 查機台、查商品、查可預訂庫存
 - 即時預訂鎖定商品
+- V6.2：OrderLockCommodity 加入 timeout、ECONNRESET 自動重試、POST body 格式 fallback
+- V6.2：建立預訂失敗時前台顯示錯誤與重試按鈕，不再無限載入
 - 模擬付款後確認鎖定商品，啟用 QRC
 - QRC 領取碼顯示
 - 預訂/交易查詢 API 代理端點
@@ -34,6 +36,8 @@ TENLIFE_API_BASE=https://api.tenlifeservice.com
 TENLIFE_COMPANY=你的營運商ID
 TENLIFE_TOKEN=你的TokenKey
 PAYMENT_MODE=mock
+# 可選：只做本機模擬，不呼叫天來 OrderLock / OrderCreate，用於畫面測試
+# MOCK_LOCK_ONLY=true
 ```
 
 ## LINE Webhook URL
@@ -84,3 +88,38 @@ GET  /api/tenlife/sales
 ## 付款
 
 目前付款使用模擬付款。正式版要接 LINE Pay、綠界、藍新或銀行金流時，請在 `/payment.html` 與 `/api/orders/:id/mock-pay` 改成正式付款流程。付款成功後再呼叫 Tenlife `OrderCreate.aspx` 啟用 QRC。
+
+
+## V6.2 預定鎖定修正說明
+
+這版專門修「建立預訂鎖定中」卡住的問題：
+
+- 後端呼叫 `OrderLockCommodity.aspx` 時會自動重試。
+- 針對 `ECONNRESET` / `fetch failed` / timeout 會回傳清楚錯誤，不會讓前台一直等待。
+- POST body 會依文件範例優先使用 raw JSON + `application/x-www-form-urlencoded`，失敗時再嘗試其他格式。
+- 前台 `confirm.html` 會顯示「重新建立預訂」按鈕。
+
+若只是想先測畫面和 QRC 流程，可以在 Render Environment 加：
+
+```env
+MOCK_LOCK_ONLY=true
+```
+
+這會跳過天來 `OrderLockCommodity.aspx` 與 `OrderCreate.aspx`，只做本機模擬。正式測試領取碼時請刪除或改成 `false`。
+
+## V6.3 更新
+
+本版處理三個重點：
+
+1. 商品圖：商品卡、確認訂單、QRC、我的訂單都會顯示商品圖片。圖片來源為天來 `Commodity.aspx` 的 `photo` / `bigPhoto`。若 API 回的是檔名，請在 Render Environment 設定 `TENLIFE_IMAGE_BASE`。
+2. 訂單通知：建立預訂與付款完成後，會推送訂單摘要到 `ADMIN_LINE_USER_ID` 設定的 LINE 使用者。
+3. 返回上一步：確認訂單頁新增「回上一步修改商品」，付款頁新增「回確認訂單」，LIFF/LINE 內建瀏覽器不再只能關掉重來。
+
+### 需要新增的 Render Environment
+
+```env
+TENLIFE_IMAGE_BASE=請向設備商確認商品圖片網址前綴
+ADMIN_LINE_USER_ID=你的LINE使用者ID
+```
+
+`ADMIN_LINE_USER_ID` 不是 LINE 官方帳號的 Channel ID，也不是你的 LINE 帳號名稱；需要是可被 LINE Messaging API push 的 userId。若沒有填，系統仍可正常下單，只是不會通知管理者。

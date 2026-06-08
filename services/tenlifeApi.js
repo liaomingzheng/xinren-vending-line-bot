@@ -78,25 +78,126 @@ function buildUrl(path, params = {}) {
   return url.toString();
 }
 
-async function requestGet(path, params = {}) {
-  if (!hasCredentials()) throw new Error('尚未設定 TENLIFE_COMPANY / TENLIFE_TOKEN');
-  const url = buildUrl(path, params);
-  const res = await fetch(url, { method: 'GET' });
-  const text = await res.text();
-  try { return JSON.parse(text); } catch (err) { throw new Error(`Tenlife 回傳不是 JSON：${text.slice(0, 300)}`); }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function requestPost(path, query = {}, body = undefined) {
+function isNetworkReset(error) {
+  const text = `${error?.message || ''} ${error?.cause?.code || ''} ${error?.cause?.message || ''}`;
+  return /ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|network/i.test(text);
+}
+
+async function fetchTextWithTimeout(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'xinren-vending-line-bot/6.2',
+        ...(options.headers || {})
+      }
+    });
+    const text = await res.text();
+    return { res, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseTenlifeJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Tenlife 回傳不是 JSON：${String(text || '').slice(0, 300)}`);
+  }
+}
+
+async function requestGet(path, params = {}, options = {}) {
+  if (!hasCredentials()) throw new Error('尚未設定 TENLIFE_COMPANY / TENLIFE_TOKEN');
+  const url = buildUrl(path, params);
+  const timeoutMs = options.timeoutMs || 15000;
+  const attempts = options.attempts || 2;
+  let lastError;
+
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const { text } = await fetchTextWithTimeout(url, { method: 'GET' }, timeoutMs);
+      return parseTenlifeJson(text);
+    } catch (error) {
+      lastError = error;
+      if (i < attempts && isNetworkReset(error)) await sleep(400 * i);
+      else break;
+    }
+  }
+  throw lastError;
+}
+
+function postBodies(body) {
+  if (body === undefined) return [{ label: 'empty', headers: {}, body: undefined }];
+  const json = JSON.stringify(body);
+  const modes = [
+    {
+      label: 'raw-json-form-content-type',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+      body: json
+    },
+    {
+      label: 'raw-json-json-content-type',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: json
+    }
+  ];
+  if (Array.isArray(body.commodity)) {
+    modes.push({
+      label: 'form-commodity-json',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
+      body: new URLSearchParams({ commodity: JSON.stringify(body.commodity) }).toString()
+    });
+  }
+  return modes;
+}
+
+async function requestPost(path, query = {}, body = undefined, options = {}) {
   if (!hasCredentials()) throw new Error('尚未設定 TENLIFE_COMPANY / TENLIFE_TOKEN');
   const url = buildUrl(path, query);
-  const options = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' }
-  };
-  if (body !== undefined) options.body = JSON.stringify(body);
-  const res = await fetch(url, options);
-  const text = await res.text();
-  try { return JSON.parse(text); } catch (err) { throw new Error(`Tenlife 回傳不是 JSON：${text.slice(0, 300)}`); }
+  const timeoutMs = options.timeoutMs || 18000;
+  const attempts = options.attempts || 2;
+  let lastError;
+
+  for (const mode of postBodies(body)) {
+    for (let i = 1; i <= attempts; i += 1) {
+      try {
+        const { text } = await fetchTextWithTimeout(url, {
+          method: 'POST',
+          headers: mode.headers,
+          body: mode.body
+        }, timeoutMs);
+        const data = parseTenlifeJson(text);
+        // 如果 API 明確回傳參數格式錯誤，嘗試下一種 body 格式。
+        if (data && data.state !== 0 && /格式|參數|commodity|資料/i.test(String(data.message || '')) && mode.label !== postBodies(body).at(-1)?.label) {
+          lastError = new Error(data.message || 'Tenlife POST 格式不接受');
+          break;
+        }
+        return data;
+      } catch (error) {
+        lastError = error;
+        if (i < attempts && isNetworkReset(error)) await sleep(500 * i);
+        else break;
+      }
+    }
+    if (!isNetworkReset(lastError)) {
+      // 非連線錯誤也嘗試下一種 POST 格式。
+      await sleep(200);
+    }
+  }
+
+  if (isNetworkReset(lastError)) {
+    throw new Error('天來 API 連線中斷（ECONNRESET），系統已重試仍失敗，請稍後再試。');
+  }
+  throw lastError;
 }
 
 function mergeMachineInfo(apiMachine = {}) {
@@ -188,7 +289,10 @@ async function sales({ begin, end, code, commodityCode, saleID } = {}) {
 
 async function lockOrder({ code, shelflife, commodity }) {
   if (!hasCredentials()) return { state: 0, message: '', id: `DEMO-${Date.now()}` };
-  return requestPost('/OrderLockCommodity.aspx', { code, shelflife }, { commodity });
+  if (!code) throw new Error('缺少智販機編號 code');
+  if (!shelflife) throw new Error('缺少預訂保留時間 shelflife');
+  if (!Array.isArray(commodity) || commodity.length === 0) throw new Error('缺少預訂商品 commodity');
+  return requestPost('/OrderLockCommodity.aspx', { code, shelflife }, { commodity }, { attempts: 3, timeoutMs: 20000 });
 }
 
 async function createOrder(id) {
@@ -221,6 +325,9 @@ module.exports = {
   DEMO_PRODUCTS,
   hasCredentials,
   signParams,
+  buildUrl,
+  requestGet,
+  requestPost,
   listMachines,
   machineState,
   commodities,

@@ -29,3 +29,4 @@
   background: #fef2f2;
   color: #991b1b;
 }
+.order-item{display:flex;gap:10px;align-items:center;border-top:1px solid #eef2f7;padding:10px 0}.order-item:first-child{border-top:0}.order-item .product-img{width:54px;height:54px;border-radius:12px}.order-item.compact{padding:8px 0}.order-item.compact .product-img{width:42px;height:42px;border-radius:10px}.back:hover,.btn:hover,.machine-card:hover,.product-card:hover{filter:brightness(.98)}
