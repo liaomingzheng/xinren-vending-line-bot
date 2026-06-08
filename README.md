@@ -1,3 +1,7 @@
+# 新刃智能販賣機商城 LINE Bot V6.7
+
+修正 OrderLockCommodity.aspx 建立預訂時 `price` 不能傳空字串的問題。天來 API 會把 `price` 當 Int32 解析，因此現在會送數字價格。
+
 # V6.6 OrderCreate id 參數確認版
 
 本版已確認 `OrderCreate.aspx` 使用 `id` 參數，不使用 `orderNo`。

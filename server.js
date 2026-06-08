@@ -288,11 +288,15 @@ app.post('/api/orders/lock', safeAsync(async (req, res) => {
   if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok: false, message: '缺少商品 items' });
 
   const shelflife = formatDateTime(addMinutes(new Date(), 15));
-  const commodity = items.map((item) => ({
-    commodityCode: String(item.commodityCode || '').trim(),
-    quantity: Number(item.quantity || 1),
-    price: ''
-  })).filter((item) => item.commodityCode && item.quantity > 0);
+  const commodity = items.map((item) => {
+    const priceValue = Number(item.price || item.amount || 0);
+    return {
+      commodityCode: String(item.commodityCode || '').trim(),
+      quantity: Number(item.quantity || 1),
+      // 天來 OrderLockCommodity 的 price 是 Int32，不能送空字串，否則會回 SerializationException。
+      price: Number.isFinite(priceValue) ? Math.round(priceValue) : 0
+    };
+  }).filter((item) => item.commodityCode && item.quantity > 0);
 
   if (!commodity.length) return res.status(400).json({ ok: false, message: '商品資料缺少 commodityCode' });
 
