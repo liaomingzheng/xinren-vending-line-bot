@@ -116,11 +116,11 @@ function renderMachines(machines) {
   const list = machines.map(m => `
     <div class="machine-card ${state.selectedMachine?.code === m.code ? 'selected' : ''}" onclick="selectMachine('${escapeHtml(m.code)}')">
       <div class="row"><strong>${escapeHtml(m.name || m.code)}</strong><span class="pill">${escapeHtml(m.area || '據點')}</span></div>
-      <div class="muted">${escapeHtml(m.address || '尚未設定地址')}</div>
+      <div class="muted">${escapeHtml(m.address || '')}</div>
       <div class="muted">機台編號：${escapeHtml(m.code)}</div>
-      <div style="margin-top:10px" class="row">
+      <div style="margin-top:8px" class="row">
         <a class="btn" onclick="event.stopPropagation()" href="${escapeHtml(m.mapUrl || '#')}" target="_blank">導航</a>
-        <button class="btn primary" onclick="event.stopPropagation();selectMachine('${escapeHtml(m.code)}');document.getElementById('products').scrollIntoView({behavior:'smooth'})">選此機台</button>
+        <button class="btn primary" onclick="event.stopPropagation();selectMachine('${escapeHtml(m.code)}');document.getElementById('products').scrollIntoView({behavior:'smooth'})">選這台</button>
       </div>
     </div>
   `).join('');
@@ -149,15 +149,7 @@ async function selectMachine(code, scroll = true) {
   state.selectedMachine = state.machines.find(m => m.code === code);
   renderMachines(state.machines);
   if (state.map && state.selectedMachine?.lat) state.map.setView([state.selectedMachine.lat, state.selectedMachine.lng], 16);
-  setHTML('selectedMachine', state.selectedMachine ? `
-    <div class="device-photo"></div>
-    <h3>${escapeHtml(state.selectedMachine.name || state.selectedMachine.code)}</h3>
-    <div class="muted">機台編號：${escapeHtml(state.selectedMachine.code)}</div>
-    <div class="muted">地址：${escapeHtml(state.selectedMachine.address || '尚未設定地址')}</div>
-    <div class="row" style="margin-top:14px">
-      <span class="pill">24H 營業</span><span class="pill">支援付款</span><span class="pill">可開發票</span>
-    </div>
-  ` : '');
+  setHTML('selectedMachine', state.selectedMachine ? `已選：<strong>${escapeHtml(state.selectedMachine.name)}</strong><br><span class="muted">${escapeHtml(state.selectedMachine.address)}</span>` : '');
   await loadMachineInventory(code);
   if (scroll) el('products').scrollIntoView({ behavior: 'smooth' });
 }
@@ -263,27 +255,24 @@ function selectProductMachine(x) {
 async function initConfirm() {
   const draft = JSON.parse(localStorage.getItem('xinren_order_draft') || '{}');
   if (!draft.machine || !draft.items?.length) {
-    setHTML('confirmBox', '<div class="notice">沒有訂單資料，請重新選擇商品。</div><a class="btn primary block" href="/order-by-machine.html?v=7">回到訂購</a>');
+    setHTML('confirmBox', '<div class="notice">沒有訂單資料，請重新選擇商品。</div><a class="btn primary block" href="/order-by-machine.html">回到訂購</a>');
     return;
   }
   const total = draft.items.reduce((sum, i) => sum + Number(i.price || 0) * Number(i.quantity || 1), 0);
   setHTML('confirmBox', `
     <div class="card">
-      <div class="row"><div><h3>${escapeHtml(draft.machine.name || draft.machine.code)}</h3><div class="muted">機台編號：${escapeHtml(draft.machine.code)}</div></div><span class="pill">現場領取</span></div>
+      <h3>${escapeHtml(draft.machine.name)}</h3>
+      <div class="muted">機台編號：${escapeHtml(draft.machine.code)}</div>
       <div class="muted">${escapeHtml(draft.machine.address || '')}</div>
     </div>
     <div class="card">
       <h3>商品明細</h3>
       ${draft.items.map(i => `<div class="order-item">${productImage(i.photoUrl)}<div class="product-main"><div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div><div class="muted">商品編號：${escapeHtml(i.commodityCode || '')}</div></div></div>`).join('')}
-      <div style="border-top:1px solid #e5e7eb;margin:12px 0"></div>
-      <div class="row"><span>取貨方式</span><strong>現場領取</strong></div>
-      <div class="row"><span>付款方式</span><strong>模擬付款</strong></div>
-      <div class="row"><span>發票開立</span><strong>個人電子發票</strong></div>
-      <div style="border-top:1px solid #e5e7eb;margin:12px 0"></div>
+      <hr style="border:0;border-top:1px solid #e5e7eb;margin:12px 0">
       <div class="row"><strong>總金額</strong><strong class="price">${money(total)}</strong></div>
     </div>
-    <button class="btn block" onclick="location.href='${escapeHtml(draft.returnTo || '/order-by-machine.html?v=7')}'">回上一步修改商品</button>
-    <div class="notice" style="margin-top:10px">按下「準備訂購」後，系統會呼叫天來預訂鎖定 API，保留 15 分鐘等待付款。</div>
+    <button class="btn block" onclick="location.href='${escapeHtml(draft.returnTo || '/order-by-machine.html')}'">回上一步修改商品</button>
+    <div class="notice" style="margin-top:10px">按下「準備訂購」後，系統會先呼叫天來即時預訂鎖定 API，保留 15 分鐘等待付款。</div>
     <button class="btn primary block" style="margin-top:12px" onclick="lockOrder()">準備訂購</button>
   `);
 }
@@ -323,7 +312,7 @@ async function initPayment() {
     const data = await api(`/api/orders/${encodeURIComponent(id)}`);
     const order = data.order;
     setHTML('paymentBox', `
-      <div class="card"><div class="payment-timer">請在 <span>15:00</span> 內完成付款</div><div class="muted" style="text-align:center">逾時預訂會自動失效</div></div>
+      <div class="card"><h3>等待付款</h3><p>請在 <strong>15 分鐘內</strong> 完成付款，逾時預訂會失效。</p></div>
       <div class="card">
         <div class="row"><span>訂單編號</span><strong>${escapeHtml(order.id)}</strong></div>
         <div class="row"><span>付款金額</span><strong class="price">${money(order.amount)}</strong></div>
@@ -334,7 +323,7 @@ async function initPayment() {
       <button class="btn danger block" style="margin-top:10px" onclick="cancelOrder('${escapeHtml(order.id)}')">取消預訂</button>
     `);
   } catch (error) {
-    setHTML('paymentBox', `<div class="notice error">付款頁載入失敗：${escapeHtml(error.message)}</div><a class="btn primary block" href="/order-by-machine.html?v=7">重新訂購</a>`);
+    setHTML('paymentBox', `<div class="notice error">付款頁載入失敗：${escapeHtml(error.message)}</div><a class="btn primary block" href="/order-by-machine.html">重新訂購</a>`);
   }
 }
 
@@ -359,8 +348,8 @@ async function initQr() {
   const data = await api(`/api/orders/${encodeURIComponent(id)}`);
   const o = data.order;
   setHTML('qrBox', `
-    <div class="celebrate"><div class="check">✓</div><h2 style="margin:0">訂購完成！</h2><div class="muted">請至指定機台掃描下方 QR Code 領取商品</div></div>
-    <div class="card" style="border-color:#86efac;background:#f0fdf4">
+    <div class="success"><strong>訂購完成！</strong><br>請前往指定販賣機掃描下方 QRC 領取商品。</div>
+    <div class="card">
       <h3>${escapeHtml(o.machine.name)}</h3>
       <div class="muted">${escapeHtml(o.machine.address || '')}</div>
       ${o.items.map(i => `<div class="order-item">${productImage(i.photoUrl)}<div class="product-main"><div class="row"><span>${escapeHtml(i.commodityName)} × ${i.quantity}</span><strong>${money(Number(i.price||0)*Number(i.quantity||1))}</strong></div><div class="muted">商品編號：${escapeHtml(i.commodityCode || '')}</div></div></div>`).join('')}
@@ -369,7 +358,7 @@ async function initQr() {
       <div class="muted">領取期限：${escapeHtml(o.shelflife)}</div>
     </div>
     <a class="btn primary block" href="${escapeHtml(o.machine.mapUrl || '#')}" target="_blank">導航到這台販賣機</a>
-    <a class="btn block" style="margin-top:10px" href="/orders.html?v=7">訂單詳情</a>
+    <a class="btn block" style="margin-top:10px" href="/orders.html">查詢訂單</a>
   `);
 }
 
